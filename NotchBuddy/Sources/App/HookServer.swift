@@ -14,16 +14,18 @@ final class HookServer: @unchecked Sendable {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("NotchBuddy")
     }
-    static var socketPath: String { supportDir.appendingPathComponent("nb.sock").path }
-    static var hookScriptPath: String {
+    static var socketPath: String {
         #if APPSTORE
-        // Use real user home (not container home) for the hook script path in settings.json
-        let realHome = NSHomeDirectoryForUser(NSUserName()) ?? FileManager.default.homeDirectoryForCurrentUser.path
-        return URL(fileURLWithPath: realHome).appendingPathComponent(".claude/coucou/nb-hook").path
+        // Container home root keeps path ≤ 103 bytes (sun_path limit on macOS is 104 incl. NUL)
+        // /Users/louis/Library/Containers/fr.louisraille.Coucou/Data/nb.sock = 66 bytes ✓
+        return NSHomeDirectory() + "/nb.sock"
         #else
-        return supportDir.appendingPathComponent("nb-hook").path
+        return supportDir.appendingPathComponent("nb.sock").path
         #endif
     }
+    // hookScriptPath is only used by the non-App Store build.
+    // App Store build derives the command from the panel-selected claudeURL in buildHooksData(claudeURL:).
+    static var hookScriptPath: String { supportDir.appendingPathComponent("nb-hook").path }
 
     // No approval blocking state — notch is notification-only, user answers in VS Code
 
@@ -48,6 +50,12 @@ final class HookServer: @unchecked Sendable {
 
     private func serverThread() {
         let path = Self.socketPath
+        // sun_path on macOS is 104 bytes including the NUL terminator → max 103 usable bytes
+        let maxSunPathBytes = MemoryLayout<sockaddr_un>.size - MemoryLayout<sa_family_t>.size - 1
+        guard path.utf8.count <= maxSunPathBytes else {
+            NSLog("HookServer: socket path too long (\(path.utf8.count) bytes, max \(maxSunPathBytes)): \(path)")
+            return
+        }
         try? FileManager.default.removeItem(atPath: path)
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -645,7 +653,8 @@ final class HookServer: @unchecked Sendable {
            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             settings = parsed
         }
-        let hookPath = Self.hookScriptPath
+        // Derive hook path from the panel-selected claudeURL (real ~/.claude, not container)
+        let hookPath = claudeURL.appendingPathComponent("coucou/nb-hook").path
         let quotedCmd = "/bin/sh \"\(hookPath.replacingOccurrences(of: "\"", with: "\\\""))\""
         let events: [(String, Int)] = [
             ("SessionStart", 10), ("SessionEnd", 10),
@@ -817,7 +826,7 @@ def main():
 
     event = payload.get('hook_event_name', '')
     socket_path = os.path.expanduser(
-        '~/Library/Containers/fr.louisraille.Coucou/Data/Library/Application Support/NotchBuddy/nb.sock'
+        '~/Library/Containers/fr.louisraille.Coucou/Data/nb.sock'
     )
 
     if event == 'PermissionRequest':
