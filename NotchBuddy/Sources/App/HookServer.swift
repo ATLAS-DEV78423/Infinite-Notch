@@ -17,9 +17,9 @@ final class HookServer: @unchecked Sendable {
     static var socketPath: String { supportDir.appendingPathComponent("nb.sock").path }
     static var hookScriptPath: String {
         #if APPSTORE
-        // Written to ~/.claude/coucou/nb-hook via security-scoped bookmark during hook installation
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/coucou/nb-hook").path
+        // Use real user home (not container home) for the hook script path in settings.json
+        let realHome = NSHomeDirectoryForUser(NSUserName()) ?? FileManager.default.homeDirectoryForCurrentUser.path
+        return URL(fileURLWithPath: realHome).appendingPathComponent(".claude/coucou/nb-hook").path
         #else
         return supportDir.appendingPathComponent("nb-hook").path
         #endif
@@ -36,6 +36,8 @@ final class HookServer: @unchecked Sendable {
     // MARK: - Start
 
     func start() {
+        // Ensure support directory exists before socket server tries to bind
+        try? FileManager.default.createDirectory(at: Self.supportDir, withIntermediateDirectories: true)
         #if !APPSTORE
         installHookScript()
         #endif
@@ -455,16 +457,18 @@ final class HookServer: @unchecked Sendable {
     func installHookScript() {
         #if APPSTORE
         // In App Store mode the script is written during settings hook installation
-        // (requires a security-scoped bookmark to ~/.claude chosen by the user)
+        // (requires NSOpenPanel to ~/.claude chosen by the user)
         #else
         let dir = Self.supportDir
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let scriptURL = URL(fileURLWithPath: Self.hookScriptPath)
-        try? nbHookScript.write(to: scriptURL, atomically: true, encoding: .utf8)
-        _ = try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o755 as NSNumber],
-            ofItemAtPath: scriptURL.path
-        )
+        // nb-hook: shell wrapper (always exits 0, calls nb-hook.py via python3)
+        let wrapperURL = URL(fileURLWithPath: Self.hookScriptPath)
+        try? nbHookShellWrapper.write(to: wrapperURL, atomically: true, encoding: .utf8)
+        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755 as NSNumber], ofItemAtPath: wrapperURL.path)
+        // nb-hook.py: Python relay
+        let pyURL = wrapperURL.deletingLastPathComponent().appendingPathComponent("nb-hook.py")
+        try? nbHookPythonGitHub.write(to: pyURL, atomically: true, encoding: .utf8)
+        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755 as NSNumber], ofItemAtPath: pyURL.path)
         #endif
     }
 
@@ -586,26 +590,20 @@ final class HookServer: @unchecked Sendable {
     // MARK: - App Store: hooks via security-scoped bookmark
 
     #if APPSTORE
-    /// App Store variant — needs a security-scoped bookmark URL pointing to ~/.claude
-    func previewClaudeHooksAppStore(claudeURL: URL) throws -> String {
-        let accessing = claudeURL.startAccessingSecurityScopedResource()
-        defer { if accessing { claudeURL.stopAccessingSecurityScopedResource() } }
+    /// Writes nb-hook script and updates settings.json in one shot.
+    /// claudeURL must be a URL from NSOpenPanel (sandbox access is granted immediately — no security scope needed).
+    func installAndWriteClaudeHooksAppStore(claudeURL: URL) throws {
         let data = try buildHooksData(claudeURL: claudeURL)
-        _pendingHooksData = data
-        return String(data: data, encoding: .utf8) ?? ""
-    }
 
-    func writeClaudeHooksAppStore(claudeURL: URL) throws {
-        guard let data = _pendingHooksData else { return }
-        let accessing = claudeURL.startAccessingSecurityScopedResource()
-        defer { if accessing { claudeURL.stopAccessingSecurityScopedResource() } }
-
-        // Write the nb-hook script into ~/.claude/coucou/nb-hook
+        // Write nb-hook (shell wrapper) + nb-hook.py (Python relay) into ~/.claude/coucou/
         let coucouDir = claudeURL.appendingPathComponent("coucou")
         try FileManager.default.createDirectory(at: coucouDir, withIntermediateDirectories: true)
-        let scriptURL = coucouDir.appendingPathComponent("nb-hook")
-        try nbHookScriptAppStore.write(to: scriptURL, atomically: true, encoding: .utf8)
-        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755 as NSNumber], ofItemAtPath: scriptURL.path)
+        let wrapperURL = coucouDir.appendingPathComponent("nb-hook")
+        try nbHookShellWrapper.write(to: wrapperURL, atomically: true, encoding: .utf8)
+        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755 as NSNumber], ofItemAtPath: wrapperURL.path)
+        let pyURL = coucouDir.appendingPathComponent("nb-hook.py")
+        try nbHookPythonAppStore.write(to: pyURL, atomically: true, encoding: .utf8)
+        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755 as NSNumber], ofItemAtPath: pyURL.path)
 
         // Write settings.json (with backup)
         let settingsURL = claudeURL.appendingPathComponent("settings.json")
@@ -614,12 +612,10 @@ final class HookServer: @unchecked Sendable {
         let backupURL = claudeURL.appendingPathComponent("settings.json.bak-\(formatter.string(from: Date()))")
         try? FileManager.default.copyItem(at: settingsURL, to: backupURL)
         try data.write(to: settingsURL, options: .atomic)
-        _pendingHooksData = nil
+        UserDefaults.standard.set(true, forKey: "coucouHooksInstalled")
     }
 
     func uninstallClaudeHooksAppStore(claudeURL: URL) throws {
-        let accessing = claudeURL.startAccessingSecurityScopedResource()
-        defer { if accessing { claudeURL.stopAccessingSecurityScopedResource() } }
         let settingsURL = claudeURL.appendingPathComponent("settings.json")
         guard let data = try? Data(contentsOf: settingsURL),
               var settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -639,6 +635,7 @@ final class HookServer: @unchecked Sendable {
         settings["hooks"] = hooks
         let newData = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
         try newData.write(to: settingsURL, options: .atomic)
+        UserDefaults.standard.set(false, forKey: "coucouHooksInstalled")
     }
 
     private func buildHooksData(claudeURL: URL) throws -> Data {
@@ -681,11 +678,31 @@ extension Notification.Name {
     static let hookExpand = Notification.Name("notchBuddy.hookExpand")
 }
 
-// MARK: - nb-hook Python script content
+// MARK: - nb-hook shell wrapper (same for both GitHub and App Store)
+// Invoked by Claude Code via /bin/sh or directly via shebang.
+// Always exits 0 — never blocks Claude Code.
+// Checks xcode-select before running python3 to avoid triggering the
+// "install developer tools" dialog on machines without Xcode CLI tools.
 
-private let nbHookScript = """
+private let nbHookShellWrapper = """
+#!/bin/sh
+# Coucou hook relay — always exits 0, never blocks Claude Code
+HOOK_DIR="$(dirname "$0")"
+if xcode-select -p >/dev/null 2>&1; then
+    out=$(/usr/bin/python3 "$HOOK_DIR/nb-hook.py" 2>/dev/null)
+    rc=$?
+    if [ "$rc" -eq 0 ] && [ -n "$out" ]; then
+        printf '%s\\n' "$out"
+    fi
+fi
+exit 0
+"""
+
+// MARK: - nb-hook Python relay (GitHub / non-sandboxed version)
+
+private let nbHookPythonGitHub = """
 #!/usr/bin/env python3
-# nb-hook — Coucou hook relay for Claude Code
+# nb-hook.py — Coucou hook relay for Claude Code (GitHub version)
 # Reads JSON from stdin, forwards to Coucou via Unix socket, translates response.
 import sys, json, os, socket
 
@@ -773,11 +790,11 @@ main()
 sys.exit(0)
 """
 
-// MARK: - nb-hook script for App Store (socket in sandboxed container)
+// MARK: - nb-hook Python relay (App Store — socket in sandboxed container)
 
-private let nbHookScriptAppStore = """
+private let nbHookPythonAppStore = """
 #!/usr/bin/env python3
-# nb-hook — Coucou (App Store) hook relay for Claude Code
+# nb-hook.py — Coucou (App Store) hook relay for Claude Code
 # Socket lives inside the sandboxed container; script runs outside the sandbox.
 import sys, json, os, socket
 

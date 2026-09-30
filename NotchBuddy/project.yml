@@ -94,7 +94,7 @@ targets:
         CFBundleName: Coucou
         CFBundleDisplayName: Coucou
         CFBundleIdentifier: fr.louisraille.Coucou
-        CFBundleVersion: "2"
+        CFBundleVersion: "3"
         CFBundleShortVersionString: "1.0"
         CFBundlePackageType: APPL
         LSUIElement: YES
