@@ -141,6 +141,32 @@ Voir le catalogue de pastilles dans `docs/SPEC.md` (section « Catalogue de past
 
 ---
 
+## 5ter. Modèles locaux (Ollama / LM Studio)
+
+**IDs de pastilles** : `ai_ollama` (jaune `#FACC15`), `ai_lmstudio` (vert citron `#A3E635`)  
+**Catégorie** : AI for the chat  
+**Plateforme** : macOS uniquement
+
+Connexion à un serveur local compatible OpenAI. Aucune clé d'API requise.
+
+### Connexion
+
+Réglages → Chat → Local models → **Connect**. Coucou envoie une requête `GET /v1/models` au serveur. Si le serveur répond avec des modèles, l'URL est sauvegardée et le fournisseur apparaît dans le sélecteur de modèle. Les modèles d'embedding (`nomic-embed-text`, `bge-*`, etc.) sont filtrés automatiquement.
+
+### Streaming
+
+Les messages sont diffusés token par token via `POST /v1/chat/completions` avec `"stream": true`. Les blocs de raisonnement (`<think>…</think>`, utilisés par des modèles comme DeepSeek-R1) sont masqués dans la bulle de chat tant que le bloc est ouvert, puis retirés de la réponse finale.
+
+### Pièces jointes
+
+Les fichiers texte sont envoyés en ligne, tronqués à 24 000 caractères. Images et PDF : seul le nom du fichier est envoyé.
+
+### Déconnexion
+
+Réglages → Chat → Local models → **Disconnect**. Efface l'URL sauvegardée et le cache des modèles. Si un fournisseur local était actif dans le chat, le chat revient sur Anthropic.
+
+---
+
 ## 6. Mail (app Mail du Mac)
 
 - Vue `mail` : À (obligatoire, validation d'adresse), Objet (prérempli : nom du fichier), Message (optionnel, une ligne).
@@ -172,3 +198,5 @@ Voir le catalogue de pastilles dans `docs/SPEC.md` (section « Catalogue de past
 | Micro + Reconnaissance vocale (optionnel) | dictée | premier clic sur le micro |
 
 Aucune permission Accessibilité nécessaire.
+
+

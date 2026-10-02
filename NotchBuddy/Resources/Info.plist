@@ -24,6 +24,11 @@
 	<true/>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>Pour lire le titre de la fenêtre active et l'attacher comme contexte.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Pour sauter au terminal, envoyer des mails et piloter Musique.</string>
 	<key>NSHighResolutionCapable</key>
