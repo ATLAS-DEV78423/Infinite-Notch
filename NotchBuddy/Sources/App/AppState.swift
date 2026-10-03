@@ -293,6 +293,31 @@ final class AppState: ObservableObject {
     @Published var musicAutomationDenied: Bool = false
     #endif
 
+    // Claude plan gauge (from statusline hook)
+    @Published var claudePlanUsage: PlanUsage? = nil {
+        didSet {
+            if let u = claudePlanUsage,
+               let data = try? JSONEncoder().encode(u) {
+                UserDefaults.standard.set(data, forKey: "claudePlanUsage")
+            }
+        }
+    }
+
+    // Plan gauge: show pill in notch header — persisted
+    #if !APPSTORE
+    @Published var showPlanInNotch: Bool = false {
+        didSet { UserDefaults.standard.set(showPlanInNotch, forKey: "showPlanInNotch") }
+    }
+    // Cached relay-installed state — updated at launch, after install/uninstall, on Settings open
+    @Published var planRelayInstalled: Bool = false
+    // Transient — reset when island closes or view changes
+    @Published var showingPlanDetail: Bool = false
+
+    func refreshPlanRelayState() {
+        planRelayInstalled = HookServer.statusLineInstalled()
+    }
+    #endif
+
     // MARK: - Init (loads persisted settings)
 
     private init() {
@@ -328,6 +353,12 @@ final class AppState: ObservableObject {
            PillCatalog.available.contains(where: { $0.id == v && $0.category == .workspace && !$0.comingSoon }) {
             mainPillId = v
         }
+        if let d = ud.data(forKey: "claudePlanUsage"),
+           let u = try? JSONDecoder().decode(PlanUsage.self, from: d) { claudePlanUsage = u }
+        #if !APPSTORE
+        if let v = ud.object(forKey: "showPlanInNotch") as? Bool { showPlanInNotch = v }
+        planRelayInstalled = HookServer.statusLineInstalled()
+        #endif
 
         // Sync SoundEngine volume on launch
         SoundEngine.shared.volume = Float(soundVolume)
