@@ -59,7 +59,7 @@ export const eBack = (t: number) => {
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
 };
 
-export const seg = (t: number, a: number, b: number) => Math.max(0, Math.min(1, (t - a) / (b - a)));
+export const seg = (t: number, a: number, b: number) => t <= a ? 0 : Math.max(0, Math.min(1, (t - a) / (b - a)));
 export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 /** Squeeze keyframes for the suckEnd → chew1 phase. */
@@ -81,26 +81,13 @@ function squeezeX(t: number): number {
   return 1.0;
 }
 
-/**
- * Progress curve of the upload bar: quick to 60 %, an unhurried middle, then a
- * last push. A plain ease-out reads as a different animation entirely.
- */
-export function uploadProgressCurve(u: number): number {
-  if (u < 0.4) return 0.6 * eOut(u / 0.4);
-  if (u < 0.85) return 0.6 + 0.32 * eInOut((u - 0.4) / 0.45);
-  return 0.92 + 0.08 * eIn((u - 0.85) / 0.15);
-}
-
-export function progressAt(t: number, progStart: number, progEnd: number): number {
-  return t < progStart ? 0 : uploadProgressCurve(seg(t, progStart, progEnd));
-}
-
 // ── Spring ──────────────────────────────────────────────────────────────────
 
 /** The reference `spring(s, target, response, damping, dt)`, integrated by hand. */
 class USSpring {
   vel = 0;
-  constructor(public v: number) {}
+  v: number;
+  constructor(v: number) { this.v = v; }
 
   step(target: number, response: number, damping: number, dt: number) {
     const k = Math.pow((2 * Math.PI) / response, 2);
@@ -147,6 +134,7 @@ export interface UploadFrame {
   barReveal: number;
   barAlpha: number;
   progress: number;
+  disposition: "preparing" | "ready" | "failed";
   flash: number;
   check: number;
   greenWash: number;
@@ -182,23 +170,25 @@ function restFrame(): UploadFrame {
     barReveal: 0,
     barAlpha: 0,
     progress: 0,
+    disposition: "preparing",
     flash: 0,
     check: 0,
     greenWash: 0,
     chooseAlpha: 0,
-    progEnd: USC.T_PROG_START + 2.4,
-    growStart: USC.T_PROG_START + 2.4 + 0.25,
-    growEnd: USC.T_PROG_START + 2.4 + 0.7,
+    progEnd: Infinity,
+    growStart: Infinity,
+    growEnd: Infinity,
   };
 }
 
 // ── Engine ──────────────────────────────────────────────────────────────────
 
 class UploadSequence {
-  uploadDuration = 2.4;
+  disposition: UploadFrame["disposition"] = "preparing";
+  private readyAt: number | null = null;
 
   get progEnd() {
-    return USC.T_PROG_START + this.uploadDuration;
+    return this.readyAt ?? Infinity;
   }
   get growStart() {
     return this.progEnd + 0.25;
@@ -256,6 +246,8 @@ class UploadSequence {
 
     this.entryWall = now;
     this.dropWall = null;
+    this.disposition = "preparing";
+    this.readyAt = null;
     this.isActive = true;
   }
 
@@ -275,17 +267,26 @@ class UploadSequence {
   /** The island stays open per the spec, so leaving the zone changes nothing. */
   exitZone() {}
 
-  performDrop(uploadDuration: number) {
-    this.uploadDuration = uploadDuration;
+  performDrop() {
+    this.disposition = "preparing";
+    this.readyAt = null;
     this.dropWall = this.now();
     // Restart the canonical post-drop timeline however long the user hovered.
     // Spring state (position and velocity) is deliberately preserved.
     this.t = USC.T_DROP;
   }
 
+  finishPreparation(success: boolean): void {
+    if (!this.isActive || !this.dropped || this.disposition !== "preparing") return;
+    this.disposition = success ? "ready" : "failed";
+    if (success) this.readyAt = Math.max(USC.T_PROG_START, this.tRef());
+  }
+
   deactivate() {
     this.isActive = false;
     this.dropWall = null;
+    this.readyAt = null;
+    this.disposition = "preparing";
   }
 
   // ── Reference time from the wall clock ────────────────────────────────────
@@ -311,9 +312,11 @@ class UploadSequence {
 
   // ── Public entry point ────────────────────────────────────────────────────
 
-  frame(): UploadFrame {
+  frame(reducedMotion = false): UploadFrame {
     if (!this.isActive) return restFrame();
-    const t = this.tRef();
+    const t = reducedMotion && this.dropped
+      ? this.disposition === "ready" ? this.growEnd : USC.T_PROG_START
+      : this.tRef();
     this.simulateTo(t);
     return this.computeFrame(t);
   }
@@ -372,6 +375,7 @@ class UploadSequence {
     f.t = t;
     f.cursorX = this.cursorX;
     f.cursorY = this.cursorY;
+    f.disposition = this.disposition;
     const progEnd = this.progEnd;
     const growStart = this.growStart;
     const growEnd = this.growEnd;
@@ -403,7 +407,8 @@ class UploadSequence {
       d = lerp(USC.D_BOX, 14, k);
     }
     if (pt >= USC.T_PROG_START) {
-      const p = progressAt(pt, USC.T_PROG_START, progEnd);
+      // Decorative travelling indicator, never a percentage of unknown bytes.
+      const p = pt >= progEnd ? 1 : 0.5 - 0.5 * Math.cos((pt - USC.T_PROG_START) * 2);
       x = lerp(USC.BAR_X0, USC.BAR_X1, p);
       y = USC.BAR_Y;
       d = 14;
@@ -449,14 +454,6 @@ class UploadSequence {
       sy = 1 + 0.12 * Math.sin(Math.PI * k);
       sx = 1 - 0.06 * Math.sin(Math.PI * k);
     }
-    if (pt >= USC.T_PROG_START && pt < progEnd) {
-      const v =
-        (progressAt(pt + 0.01, USC.T_PROG_START, progEnd) -
-          progressAt(pt, USC.T_PROG_START, progEnd)) / 0.01;
-      const st = Math.max(0, Math.min(1, v * 0.18));
-      sx = 1 + 0.25 * st;
-      sy = 1 - 0.15 * st;
-    }
     if (pt >= growStart && pt < growEnd) {
       sy = 1 + 0.06 * Math.sin(Math.PI * seg(pt, growStart, growEnd));
     }
@@ -493,7 +490,7 @@ class UploadSequence {
       eOut(seg(pt, USC.T_BAR_IN, USC.T_BAR_IN + 0.25)) * (1 - seg(pt, growStart, growStart + 0.2));
     f.barAlpha =
       seg(pt, USC.T_BAR_IN + 0.05, USC.T_BAR_IN + 0.25) * (1 - seg(pt, growStart, growStart + 0.2));
-    f.progress = progressAt(pt, USC.T_PROG_START, progEnd);
+    f.progress = pt >= progEnd ? 1 : 0;
     f.flash = pt >= progEnd ? Math.sin(Math.PI * seg(pt, progEnd, progEnd + 0.3)) : 0;
     f.check = pt >= progEnd ? eBack(seg(pt, progEnd, progEnd + 0.25)) : 0;
 

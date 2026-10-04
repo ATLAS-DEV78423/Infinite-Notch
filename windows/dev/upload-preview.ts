@@ -5,10 +5,18 @@ import { UploadCanvas } from "../src/upload/canvas";
 import { UploadSeq } from "../src/upload/sequence";
 import { State } from "../src/core/state";
 
-State.droppedFile = { name: "rapport-q3.pdf", path: "C:/tmp/rapport-q3.pdf" };
+State.filePreparation.begin("preview", "rapport-q3.pdf");
 
 const stage = document.getElementById("stage")!;
 const clock = document.getElementById("clock")!;
+const ready = document.createElement("button");
+ready.textContent = "Resolve synthetic preparation (no native I/O)";
+ready.onclick = () => {
+  if (!UploadSeq.dropped) return;
+  State.filePreparation.complete("preview", { name: "rapport-q3.pdf", path: "/synthetic-preview/rapport-q3.pdf", size: 0 });
+  UploadSeq.finishPreparation(true);
+};
+clock.after(ready);
 
 const canvas = new UploadCanvas({
   ask: () => (clock.textContent = "ASK clicked"),
@@ -33,6 +41,7 @@ function loop(now: number) {
     start = now;
     t = 0;
     dropped = false;
+    State.filePreparation.begin("preview", "rapport-q3.pdf");
     UploadSeq.enterZone(520, 96);
   }
   if (!dropped) {
@@ -40,7 +49,7 @@ function loop(now: number) {
     UploadSeq.updateCursor(x, 96);
     if (t >= 1.2) {
       dropped = true;
-      UploadSeq.performDrop(2.4);
+      UploadSeq.performDrop();
     }
   }
   canvas.draw(UploadSeq.frame(), now / 1000);

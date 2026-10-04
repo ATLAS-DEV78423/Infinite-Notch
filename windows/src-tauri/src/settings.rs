@@ -10,6 +10,8 @@ pub struct Settings {
     pub sound_enabled: bool,
     pub sound_volume: f64,
     pub auto_close_interval: f64,
+    #[serde(default, deserialize_with = "hover_delay", serialize_with = "serialize_hover_delay")]
+    pub hover_open_delay_ms: u32,
     pub absence_interval: f64,
     pub active_integrations: Vec<String>,
     /// "primary" = the main display, "cursor" = whichever display the mouse is on.
@@ -26,12 +28,21 @@ fn default_model() -> String {
     crate::claude::DEFAULT_MODEL.to_string()
 }
 
+fn hover_delay<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    Ok(u32::deserialize(deserializer)?.min(1000))
+}
+
+fn serialize_hover_delay<S: serde::Serializer>(delay: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+    (*delay).min(1000).serialize(serializer)
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             sound_enabled: true,
             sound_volume: 0.12,
             auto_close_interval: 15.0,
+            hover_open_delay_ms: 0,
             absence_interval: 180.0,
             active_integrations: vec![
                 "integration_resend".into(),
@@ -70,4 +81,30 @@ pub fn save(settings: &Settings) -> std::io::Result<()> {
     let json = serde_json::to_vec_pretty(settings)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     std::fs::write(settings_path(), json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_default_to_immediate_hover() {
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("hoverOpenDelayMs");
+        let loaded: Settings = serde_json::from_value(old).unwrap();
+        assert_eq!(serde_json::to_value(loaded).unwrap()["hoverOpenDelayMs"], 0);
+    }
+
+    #[test]
+    fn hover_delay_is_clamped_before_application_and_serialization() {
+        for (input, expected) in [(0, 0), (250, 250), (1000, 1000), (5000, 1000)] {
+            let mut value = serde_json::to_value(Settings::default()).unwrap();
+            value["hoverOpenDelayMs"] = serde_json::json!(input);
+            let loaded: Settings = serde_json::from_value(value).unwrap();
+            assert_eq!(loaded.hover_open_delay_ms, expected);
+            assert_eq!(serde_json::to_value(loaded).unwrap()["hoverOpenDelayMs"], expected);
+        }
+        let direct = Settings { hover_open_delay_ms: 5000, ..Settings::default() };
+        assert_eq!(serde_json::to_value(direct).unwrap()["hoverOpenDelayMs"], 1000);
+    }
 }

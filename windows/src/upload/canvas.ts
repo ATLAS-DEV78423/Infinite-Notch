@@ -7,7 +7,7 @@
 
 import { State } from "../core/state";
 import {
-  USC, eIn, eInOut, eOut, lerp, progressAt,
+  USC, eIn, eInOut, eOut, lerp,
   type UploadEyeShape, type UploadFrame,
 } from "./sequence";
 
@@ -79,9 +79,10 @@ export class UploadCanvas {
 
     // Invisible hit areas at the reference button positions. The labels are
     // painted on the canvas; these only catch the click.
-    const mk = (x: number, w: number, onclick: () => void) => {
+    const mk = (x: number, w: number, label: string, onclick: () => void) => {
       const b = document.createElement("button");
       b.className = "upload-hit";
+      b.setAttribute("aria-label", label);
       b.style.left = `${x}px`;
       b.style.top = "113px";
       b.style.width = `${w}px`;
@@ -91,7 +92,11 @@ export class UploadCanvas {
     };
     this.overlay = document.createElement("div");
     this.overlay.id = "upload-overlay";
-    this.overlay.append(mk(114, 168, actions.ask), mk(290, 120, actions.cancel));
+    this.overlay.append(
+      mk(114, 168, "Ask a question about the prepared file", () => { if (State.droppedFile) actions.ask(); }),
+      mk(290, 120, "Cancel file preparation", actions.cancel),
+    );
+    this.overlay.inert = true;
 
     this.el = document.createElement("div");
     this.el.id = "upload-layer";
@@ -100,8 +105,17 @@ export class UploadCanvas {
     this.ctx = this.canvas.getContext("2d");
   }
 
+  clear() {
+    this.ctx?.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.overlay.style.display = "none";
+    this.overlay.inert = true;
+  }
+
   /** `wallTime` in seconds drives the marching dashes, like the macOS timeline. */
   draw(f: UploadFrame, wallTime: number) {
+    const choose = f.disposition === "ready" && !!State.droppedFile && f.chooseAlpha > 0.5;
+    this.overlay.style.display = choose ? "block" : "none";
+    this.overlay.inert = !choose;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     if (this.sizedFor !== dpr) {
       this.sizedFor = dpr;
@@ -116,9 +130,6 @@ export class UploadCanvas {
     ctx.clearRect(0, 0, USC.W, USC.ISL_H);
 
     this.drawScene(ctx, f, wallTime);
-
-    // The buttons only exist once the choose card has faded in.
-    this.overlay.style.display = f.chooseAlpha > 0.5 ? "block" : "none";
   }
 
   // ── Scene ─────────────────────────────────────────────────────────────────
@@ -200,8 +211,7 @@ export class UploadCanvas {
     const by = USC.BAR_Y;
     const barLen = (x1 - x0) * f.barReveal;
 
-    const name = State.droppedFile?.name ?? "file";
-    text(ctx, `Uploading ${name}`, x0, by - 30, `500 12.5px ${FONT}`, "#A9ADB5");
+    text(ctx, f.disposition === "ready" ? "Ready" : "Preparing file…", x0, by - 30, `500 12.5px ${FONT}`, "#A9ADB5");
 
     if (f.check > 0) {
       ctx.save();
@@ -221,8 +231,6 @@ export class UploadCanvas {
       ctx.lineJoin = "round";
       ctx.stroke();
       ctx.restore();
-    } else {
-      text(ctx, `${Math.round(f.progress * 100)} %`, x1, by - 30, `500 12.5px ${FONT}`, "#A9ADB5", "right");
     }
 
     // Track.
@@ -232,7 +240,15 @@ export class UploadCanvas {
       ctx.fill();
     }
 
-    // Fill.
+    // Indeterminate work: a travelling segment, never a guessed byte fill.
+    if (f.disposition === "preparing" && barLen > 0) {
+      ctx.fillStyle = "#A9ADB5";
+      const x = Math.max(x0, Math.min(x0 + barLen - 32, f.x - 16));
+      rr(ctx, x, by - 3, Math.min(32, barLen), 6, 3);
+      ctx.fill();
+    }
+
+    // Ready fill is driven only by the native receipt.
     const fx = lerp(x0, x1, f.progress);
     if (fx > x0 + 1) {
       const flashGreen = `rgb(${Math.round(lerp(52, 110, f.flash))},${Math.round(
@@ -246,22 +262,6 @@ export class UploadCanvas {
       ctx.fill();
     }
 
-    // Glow trail, its length driven by how fast the bar is moving.
-    if (f.progress > 0.01 && f.progress < 1) {
-      const v =
-        (progressAt(f.t + 0.01, USC.T_PROG_START, f.progEnd) -
-          progressAt(f.t, USC.T_PROG_START, f.progEnd)) / 0.01;
-      const tl = Math.max(8, Math.min(34, 8 + v * 40));
-      const g = ctx.createLinearGradient(fx - tl, 0, fx, 0);
-      g.addColorStop(0, "rgba(52,212,153,0)");
-      g.addColorStop(1, "rgba(110,231,183,0.6)");
-      ctx.save();
-      ctx.filter = "blur(3px)";
-      ctx.fillStyle = g;
-      rr(ctx, fx - tl, by - 4, tl, 8, 4);
-      ctx.fill();
-      ctx.restore();
-    }
     ctx.restore();
   }
 

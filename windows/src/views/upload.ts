@@ -52,7 +52,7 @@ export function buildUpload(): ViewHost {
 }
 
 export function buildUploading(): ViewHost {
-  const label = h("span", { class: "up-name" });
+  const label = h("span", { class: "up-name", role: "status", "aria-live": "polite" });
   const percent = h("span", { class: "up-pct" });
   const fill = h("div", { class: "up-fill" });
   const glow = h("div", { class: "up-glow" });
@@ -67,17 +67,16 @@ export function buildUploading(): ViewHost {
   return {
     el,
     sync() {
-      const done = State.uploadProgress >= 0.999;
-      const pct = Math.round(State.uploadProgress * 100);
+      const done = State.filePreparation.current?.state === "ready";
       label.textContent = done
-        ? `✓  ${State.droppedFile?.name ?? "File"}`
-        : `Uploading ${State.droppedFile?.name ?? "file"}`;
+        ? "Ready"
+        : "Preparing file…";
       label.classList.toggle("done", done);
-      percent.textContent = done ? "" : `${pct} %`;
-      const w = State.uploadProgress * 526;
+      percent.textContent = "";
+      const w = done ? 526 : 0;
       fill.style.width = `${w}px`;
       glow.style.transform = `translateX(${Math.max(0, w - 14)}px)`;
-      glow.style.opacity = State.uploadProgress > 0.01 ? "1" : "0";
+      glow.style.opacity = done ? "1" : "0";
       card.classList.toggle("done", done);
     },
   };
@@ -86,14 +85,15 @@ export function buildUploading(): ViewHost {
 export function buildChoose(actions: ViewActions): ViewHost {
   const title = h("div", { class: "title" });
   const sub = h("div", { class: "sub", text: "What do you want to do with it?" });
+  const ask = h("button", {
+    class: "btn primary",
+    text: "Ask a question",
+    onclick: () => { if (State.droppedFile) actions.setView("prompt"); },
+  }) as HTMLButtonElement;
   const row = h(
     "div",
     { class: "actions" },
-    h("button", {
-      class: "btn primary",
-      text: "Ask a question",
-      onclick: () => actions.setView("prompt"),
-    }),
+    ask,
     h("button", {
       class: "btn secondary",
       text: "Cancel",
@@ -114,9 +114,9 @@ export function buildChoose(actions: ViewActions): ViewHost {
     el,
     sync() {
       clear(title);
-      title.append(
-        h("b", { text: State.droppedFile?.name ?? "file" }),
-        document.createTextNode(" is ready."),
+      ask.disabled = !State.droppedFile;
+      if (State.droppedFile) title.append(
+        h("b", { text: State.droppedFile.name }), document.createTextNode(" is ready."),
       );
     },
   };

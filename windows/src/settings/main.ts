@@ -381,6 +381,16 @@ function generalSection(): HTMLElement {
     void save();
   });
 
+  const hoverDelay = h("input", {
+    id: "hover-delay", type: "number", min: "0", max: "1000", step: "1",
+    value: String(settings.hoverOpenDelayMs), style: "width:72px",
+  }) as HTMLInputElement;
+  hoverDelay.addEventListener("change", () => {
+    settings.hoverOpenDelayMs = Math.max(0, Math.min(1000, Math.round(Number(hoverDelay.value) || 0)));
+    hoverDelay.value = String(settings.hoverOpenDelayMs);
+    void save();
+  });
+
   const screen = h("select", {}) as HTMLSelectElement;
   screen.append(
     h("option", { value: "primary", text: "Main display" }),
@@ -404,7 +414,12 @@ function generalSection(): HTMLElement {
     h("div", { class: "row" },
       h("label", { text: "Auto-close" }),
       autoClose,
-      h("span", { class: "hint", text: "seconds after you leave the island" }),
+      h("span", { class: "hint", text: "seconds after you leave a clicked or explicitly opened island" }),
+    ),
+    h("div", { class: "row" },
+      h("label", { for: "hover-delay", text: "Hover delay" }),
+      hoverDelay,
+      h("span", { class: "hint", text: "milliseconds before opening (0–1000)" }),
     ),
     h("div", { class: "row" },
       h("label", { text: "Island lives on" }),

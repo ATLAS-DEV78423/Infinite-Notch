@@ -85,8 +85,11 @@ export const Bridge = {
   chatSend: (query: string, context: ChatContext | null) =>
     callOrThrow<{ text: string }>("chat_send", { query, context }),
   chatReset: () => call<void>("chat_reset"),
-  /** Copies a dropped file into the inbox. */
-  ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
+  /** Native preparation receipt; the caller must still own operationId. */
+  ingestFile: (path: string, operationId: string) =>
+    callOrThrow<DroppedFile>("prepare_file", { path, operationId }),
+  cancelFileCopy: (operationId: string): Promise<void | null> =>
+    IS_TAURI ? callOrThrow<void>("cancel_file_copy", { operationId }) : Promise.resolve(null),
   /** Only ever tells you whether a key exists — never its value. */
   secretPresent: (key: string) => call<boolean>("secret_present", { key }),
   secretSet: (key: string, value: string) => callOrThrow<void>("secret_set", { key, value }),

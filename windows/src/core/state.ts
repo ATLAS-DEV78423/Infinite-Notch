@@ -3,6 +3,7 @@
 import type { BotEmoteName, BotStateName, IslandMode, IslandViewName } from "./layout";
 import type { EyeShape } from "../mochi/engine";
 import { AgentMonitorStore, monitorStatusText } from "./agent-monitor";
+import { FilePreparation } from "./file-preparation";
 
 export type AgentSource = "claudeCode" | "n8n" | "agent";
 export type PillBadge = "approval" | "finished" | "error";
@@ -87,6 +88,7 @@ export interface Settings {
   soundEnabled: boolean;
   soundVolume: number;
   autoCloseInterval: number;
+  hoverOpenDelayMs: number;
   absenceInterval: number;
   activeIntegrations: string[];
   screen: "primary" | "cursor";
@@ -100,6 +102,7 @@ export const DEFAULT_SETTINGS: Settings = {
   soundEnabled: true,
   soundVolume: 0.12,
   autoCloseInterval: 15,
+  hoverOpenDelayMs: 0,
   absenceInterval: 180,
   activeIntegrations: [
     "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
@@ -163,11 +166,14 @@ class AppState {
   }
 
   uploadProgress = 0;
-  uploadDuration = 2.4;
   fileDragOver = false;
 
+  readonly filePreparation = new FilePreparation();
   promptContext: PromptContext | null = null;
-  droppedFile: { name: string; path: string } | null = null;
+  get droppedFile() {
+    const item = this.filePreparation.current;
+    return item?.state === "ready" ? item.file ?? null : null;
+  }
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
   chatHistory: ChatMessage[] = [];
