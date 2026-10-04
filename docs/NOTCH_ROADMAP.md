@@ -16,15 +16,16 @@ derivative with restricted upstream assets without permission.
 - [Build, verification, privacy and contribution guide](DEVELOPMENT.md)
 
 The user approved built-in LocalSend, one shared Rust transfer engine, both native
-UIs, staged delivery and the written master spec on 2026-10-04. Implementation-plan
-review remains the next gate. The previously chosen execution method is bounded
-subagent-driven implementation with centralized review/checks.
+UIs, staged delivery and the written master spec on 2026-10-04. The foundation
+implementation plan was also approved. Bounded implementation and centralized
+review/checks produced the first partial checkpoint; see
+[the foundation receipt](research/notch-foundation-verification.md).
 
 ## Delivery map
 
 | Stage | Dependencies | Work / required evidence | Current status |
 | --- | --- | --- | --- |
-| A: Reliability foundation | Reviewed first plan | Full hover/delay/independent holds, collision-safe owned copying, truthful ready state, cancellation/stale callback checks | Detailed plan written; review pending |
+| A: Reliability foundation | Reviewed first plan | Full hover/delay/independent holds, collision-safe owned copying, truthful ready state, cancellation/stale callback checks | Tauri/Rust source and portable/Linux checks pass; Swift/Windows native milestone remains pending |
 | B: Multi-item shelf | A copy contracts | 32-item temporary files/folders/images/text shelf, remove/clear/order/disable, real native drag-out/open/share/Mail/Messages, bounded traversal and export leases | Not implemented; dedicated plan follows A |
 | C: LocalSend core | Safe native file handles; qualified dependencies/bridge | Opt-in multicast roster, direct/manual address, HTTPS identity, prepare/upload/cancel, consent/save/safe partial commits, byte/integrity tests | Not implemented; native bridge/auth probes needed |
 | D: LocalSend native UI | B and real C events | Devices, send/drop-to-send, incoming prompt, visibility, compact/expanded real progress, seven state labels, cancel, queue/retry/completion | Not implemented; no timed fake progress |

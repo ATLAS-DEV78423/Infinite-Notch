@@ -14,9 +14,12 @@ checkout for development; packaged distribution requires resolving
   Hermes registration/dispatch passed with supplied synthetic hook inputs.
 - Rich producers, actual Hermes model-turn inputs, native ingress/lifetime,
   SwiftUI inspector and full platform acceptance remain incomplete.
-- The broader shelf/LocalSend/media/HUD/calendar expansion is **planned**, not
-  implemented. [Roadmap](NOTCH_ROADMAP.md) and [approved design](superpowers/specs/2026-10-04-notch-app-expansion-design.md)
-  separate obligations from verified behavior.
+- The first Tauri foundation implements full hover/holds and receipt-owned file
+  readiness, with native owned-copy/cancel and Linux crash cleanup. It is still
+  one regular-file selection, not the broader shelf/LocalSend/media/HUD/calendar
+  expansion. [Foundation receipt](research/notch-foundation-verification.md),
+  [roadmap](NOTCH_ROADMAP.md) and [approved design](superpowers/specs/2026-10-04-notch-app-expansion-design.md)
+  separate implemented obligations from pending native/full-release behavior.
 
 See [the agent receipt](research/agent-inspector-verification.md) for precise
 commands, evidence limits and pending checks. Do not interpret a source push as
@@ -78,7 +81,7 @@ is incomplete. That failure is deliberate and must not be converted into success
 without real evidence. For native Rust/Swift prerequisites and fixture integrity,
 use the precise commands in the agent receipt, not guessed global installations.
 
-2026-10-04 checkpoint verification on Linux:
+Initial monitoring/design checkpoint verification (2026-10-04, `5dc8e17`):
 
 | Check | Observed result | What it does not prove |
 | --- | --- | --- |
@@ -89,8 +92,18 @@ use the precise commands in the agent receipt, not guessed global installations.
 | Full platform gate | Incomplete by contract | Release readiness |
 | Expansion spec coverage | 52 feature rows plus settings mapped | Implemented shelf/LocalSend/media/system/calendar |
 
-The new foundation check commands in its plan do not exist yet; they are explicit
-deliverables, not commands claimed to have passed.
+The foundation runner is now implemented. From repository root:
+
+```sh
+bash scripts/test-notch-foundation.sh
+bash scripts/test-notch-foundation.sh --require-native
+```
+
+Supply `RUSTC`/its command-local environment if Rust is not on PATH. Fresh detailed
+results and disposable-toolchain invocations are in the
+[foundation receipt](research/notch-foundation-verification.md). Strict native
+acceptance still fails as required; unavailable lanes are never passed by a
+browser fixture or a stale receipt file.
 
 Both portable and strict commands were rerun for the source checkpoint. The
 portable command exited 0; the strict command exited 1 with

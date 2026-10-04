@@ -10,6 +10,11 @@
 
 **Spec:** [approved expansion design](../specs/2026-10-04-notch-app-expansion-design.md), sections 3–5, 10–14. This is the first executable subsystem plan; [the release roadmap](../../NOTCH_ROADMAP.md) tracks the remaining work, including the existing inspector.
 
+**Execution status:** Approved by the user on 2026-10-04. Tauri/Rust Tasks 1/3/5
+have scoped implementations and portable/Linux verification; native acceptance
+and Swift Tasks 2/4 remain pending. Task 6's runner/receipt is implemented, not
+proof of native completion. See [the current receipt](../../research/notch-foundation-verification.md).
+
 ## Global Constraints
 
 - Hover delay default 0, validated 0–1000 ms; hover-origin leave grace 300 ms.
@@ -192,4 +197,5 @@ dropping all but the first. Do not claim the full shelf or LocalSend is shipped.
   required; either alone is insufficient.
 - Every Review Focus failure has named assertions in its owner task. Missing
   native compiler/device availability is a stop condition, not a test exemption.
-- Plan status: **awaiting user review**, with no new-scope implementation yet.
+- Plan status: **approved and partially executed**. Do not redispatch the reviewed
+  Tauri/Rust source tasks; finish native acceptance and pending Swift work.

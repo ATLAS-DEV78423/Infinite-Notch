@@ -1,7 +1,7 @@
 # Coucou notch-app expansion — design and release contract
 
 Date: 2026-10-04. Status: **written spec approved by the user** after review on
-2026-10-04; detailed implementation-plan review remains pending.
+2026-10-04; the foundation implementation plan was subsequently approved.
 No release approval is inferred from this document's existence. The user has
 subsequently requested documented source checkpoints on their Infinite-Notch
 GitHub repository; that does not authorize packaged releases or signing changes.
