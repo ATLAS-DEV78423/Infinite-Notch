@@ -11,6 +11,7 @@ on:
       - 'scripts/test-plan-gauge.sh'
       - 'scripts/test-ask-question.sh'
       - 'scripts/test-island-fsm.sh'
+      - 'scripts/test-file-preparation.sh'
       - 'tests/**'
       - '.github/workflows/native-macos.yml'
   pull_request:
@@ -22,6 +23,7 @@ on:
       - 'scripts/test-plan-gauge.sh'
       - 'scripts/test-ask-question.sh'
       - 'scripts/test-island-fsm.sh'
+      - 'scripts/test-file-preparation.sh'
       - 'tests/**'
       - '.github/workflows/native-macos.yml'
   workflow_dispatch:
@@ -130,6 +132,11 @@ jobs:
         if: ${{ always() }}
         run: bash scripts/test-island-fsm.sh
 
+      - name: Test file preparation readiness
+        id: file_preparation
+        if: ${{ always() }}
+        run: bash scripts/test-file-preparation.sh
+
       - name: Summarize limited qualification results
         if: ${{ always() }}
         run: |
@@ -144,6 +151,7 @@ jobs:
           | Plan gauge | ${{ steps.plan_gauge.outcome }} |
           | Ask question | ${{ steps.ask_question.outcome }} |
           | Island hover FSM | ${{ steps.island_fsm.outcome }} |
+          | File preparation readiness | ${{ steps.file_preparation.outcome }} |
           | NotchBuddy Debug (unsigned) | ${{ steps.debug_direct.outcome }} |
           | CoucouAppStore Debug (unsigned) | ${{ steps.debug_appstore.outcome }} |
           | NotchBuddy Release (unsigned) | ${{ steps.release_direct.outcome }} |
