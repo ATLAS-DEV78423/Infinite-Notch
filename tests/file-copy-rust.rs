@@ -335,6 +335,23 @@ mod checks {
         assert!(std::fs::read(source).unwrap() == vec![5; 2 * 65536]);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn source_with_live_writer_is_not_published() {
+        let root = Root::new();
+        let source = root.source("source", b"synthetic bytes");
+        let writer = std::fs::File::options().write(true).open(&source).unwrap();
+        assert!(copy_into(&source, &root.copies(), "writer-held", &AtomicBool::new(false)).is_err(), "a source with a live writer was published");
+        assert!(!root.copies().join("writer-held").exists());
+        assert!(std::fs::read(&source).unwrap() == b"synthetic bytes");
+        drop(writer);
+        let copy = copy_into(&source, &root.copies(), "writer-closed", &AtomicBool::new(false)).unwrap();
+        assert_eq!(copy.size, 15);
+        assert!(std::fs::read(&copy.path).unwrap() == b"synthetic bytes");
+        assert!(std::fs::read(&source).unwrap() == b"synthetic bytes");
+        discard(&root.copies(), "writer-closed").unwrap();
+    }
+
     #[test]
     fn large_file_streams_exact_bytes_in_chunks() {
         use std::io::{Read, Write};
@@ -344,6 +361,7 @@ mod checks {
         let chunk = [11u8; 65536];
         for _ in 0..256 { file.write_all(&chunk).unwrap(); }
         file.sync_all().unwrap();
+        drop(file);
         let copy = copy_into(&source, &root.copies(), "large", &AtomicBool::new(false)).unwrap();
         assert_eq!(copy.size, 16 * 1024 * 1024);
         let mut output = std::fs::File::open(&copy.path).unwrap();
