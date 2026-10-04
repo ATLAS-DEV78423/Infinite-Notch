@@ -11,6 +11,8 @@ import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
+import { buildAgentSession } from "./agent-session";
+import { contextFraction } from "../core/agent-monitor";
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -116,10 +118,11 @@ export function buildHeader(actions: ViewActions): ViewHost {
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
-function buildOverview(actions: ViewActions): ViewHost {
+export function buildOverview(actions: ViewActions): ViewHost {
   const ticker = new Ticker();
   const who = h("div", { class: "who" });
-  const tickerBody = h("div", { class: "card-body" }, who, ticker.el);
+  const directory = h("div", { class: "monitor-directory", tabindex: 0, "aria-label": "Selected session directory" });
+  const tickerBody = h("div", { class: "card-body" }, who, directory, ticker.el);
   const leftBody = h("div", { class: "left-body" });
   const jump = h(
     "button",
@@ -127,6 +130,9 @@ function buildOverview(actions: ViewActions): ViewHost {
     svg(ICONS.arrowUpRight, 8),
   );
   const left = card(null, leftBody, jump);
+  const details = h("button", { class: "link-btn monitor-open", text: "Details", onclick: () => actions.setView("agentSession") });
+  const hint = h("span", { class: "monitor-hint" });
+  left.append(hint, details);
   const pills = h("div", { class: "pills" });
   const right = card(null, pills);
 
@@ -140,6 +146,12 @@ function buildOverview(actions: ViewActions): ViewHost {
   let lastFocus: string | null = null;
   let mode: "ticker" | "card" | null = null;
   let cardKey = "";
+  let monitorTicker = false;
+  let timer: number | null = null;
+  let lastSync = -Infinity;
+  let renderedSelection = "";
+  let lastView = State.view;
+  let navigationDirty = false;
 
   const hooks: IntegrationCardHooks = {
     get detailOpen() {
@@ -158,72 +170,113 @@ function buildOverview(actions: ViewActions): ViewHost {
     openSettings: () => actions.openSettingsWindow(),
   };
 
-  return {
+  function render() {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null; lastSync = performance.now(); navigationDirty = false;
+    const task = State.focusTask;
+    const monitorAgent = task?.monitorOwned ? task.id.slice(6) : null;
+    const selected = monitorAgent ? State.agentMonitor.selected(monitorAgent) : undefined;
+    renderedSelection = JSON.stringify(selected?.key ?? null);
+    // Scrub the owned rows/queue before detaching, even when cleanup arrives
+    // after focus moved elsewhere. Legacy ticker history is left intact.
+    if (monitorTicker && (!monitorAgent || !selected)) {
+      ticker.snapshot(""); clear(who); directory.textContent = "";
+      monitorTicker = false;
+    }
+    const monitor = selected?.packet.monitor;
+    const fraction = contextFraction(monitor?.usage ?? {});
+    const quality = monitor?.usage?.context ? `${monitor.usage.context.quality === "estimated" ? "~ Estimated" : "Reported"} · ` : "";
+    hint.textContent = monitorAgent ? `${quality}${fraction === null ? "Context unavailable" : `${Math.round(fraction * 100)}% context`}` : "";
+    const cwd = monitorAgent ? selected?.packet.cwd ?? "Directory unavailable" : "";
+    if (directory.textContent !== cwd) directory.textContent = cwd;
+    directory.hidden = !monitorAgent;
+    el.classList.toggle("monitor-session", !!monitorAgent);
+    if (task?.id !== lastFocus) {
+      lastFocus = task?.id ?? null;
+      detailOpen = false;
+      cardKey = "";
+      mode = null;
+    }
+
+    // Claude and external live sessions use the existing ticker.
+    const sessionActive =
+      task?.monitorOwned || ((task?.id === "integration_claude" || task?.source === "agent") && (task.state !== "idle" || task.steps.length > 0));
+
+    if (task && sessionActive) {
+      if (mode !== "ticker") {
+        clear(leftBody);
+        leftBody.append(tickerBody);
+        mode = "ticker";
+        cardKey = "";
+      }
+      clear(who);
+      who.append(
+        dot(task.color, 7),
+        h("span", { class: "name", text: task.name }),
+        h("span", { class: "tool", text: task.source === "claudeCode" ? "Claude Code" : monitorAgent ? `${State.agentMonitor.sessions(monitorAgent).length} sessions` : task.source === "agent" ? "Session" : "n8n" }),
+      );
+      if (task.steps.length > 1) {
+        who.append(h("span", {
+          class: "count",
+          text: `${Math.min(task.stepIndex + 1, task.steps.length)}/${task.steps.length}`,
+        }));
+      }
+      if (task.monitorOwned) {
+        const tool = monitor?.tools?.find((t) => t.state === "running" || t.state === "pending") ?? monitor?.tools?.at(-1);
+        const file = monitor?.files?.find((f) => f.state === "running" || f.state === "pending") ?? monitor?.files?.at(-1);
+        const activity = tool ? `${tool.name} · ${tool.state}${tool.command || tool.target ? ` · ${tool.command ?? tool.target}` : ""}${file && file.path !== tool.target ? ` · ${file.action}: ${file.path}` : ""}`
+          : file ? `${file.action} · ${file.state} · ${file.path}` : task.steps.at(-1) ?? "Session ended — details cleared";
+        ticker.snapshot(activity);
+        monitorTicker = !!selected;
+      }
+      else ticker.sync(task);
+    } else if (task) {
+      const info = State.integrations[task.id];
+      const key = [
+        task.id, detailOpen, task.state, task.steps.join("|"),
+        info?.loaded, info?.error, info?.configured,
+        JSON.stringify(info?.data ?? {}),
+      ].join("~");
+      if (key !== cardKey) {
+        cardKey = key;
+        mode = "card";
+        clear(leftBody);
+        leftBody.append(renderIntegrationCard(task, hooks));
+      }
+    }
+
+    details.hidden = !task?.monitorOwned;
+    jump.style.display = detailOpen || task?.monitorOwned ? "none" : "";
+
+    const others = State.otherTasks.slice(0, 4);
+    const pillKey = others.map((t) => `${t.id}:${t.pillBadge ?? ""}`).join("|");
+    if (pillKey !== pillIds) {
+      pillIds = pillKey;
+      clear(pills);
+      for (const t of others) pills.append(buildPill(t, actions));
+      pruneMiniBots();
+    }
+  }
+  const host: ViewHost = {
     el,
     tick(nowMs: number) {
       if (mode === "ticker") ticker.tick(nowMs);
     },
     sync() {
       const task = State.focusTask;
-      if (task?.id !== lastFocus) {
-        lastFocus = task?.id ?? null;
-        detailOpen = false;
-        cardKey = "";
-        mode = null;
-      }
-
-      // VS Code with a live Claude Code session keeps the ticker; every other
-      // pill shows its own card, exactly like IntegrationCardView.
-      const sessionActive =
-        task?.id === "integration_claude" && (task.state !== "idle" || task.steps.length > 0);
-
-      if (task && sessionActive) {
-        if (mode !== "ticker") {
-          clear(leftBody);
-          leftBody.append(tickerBody);
-          mode = "ticker";
-          cardKey = "";
-        }
-        clear(who);
-        who.append(
-          dot(task.color, 7),
-          h("span", { class: "name", text: task.name }),
-          h("span", { class: "tool", text: task.source === "claudeCode" ? "Claude Code" : "n8n" }),
-        );
-        if (task.steps.length > 1) {
-          who.append(h("span", {
-            class: "count",
-            text: `${Math.min(task.stepIndex + 1, task.steps.length)}/${task.steps.length}`,
-          }));
-        }
-        ticker.sync(task);
-      } else if (task) {
-        const info = State.integrations[task.id];
-        const key = [
-          task.id, detailOpen, task.state, task.steps.join("|"),
-          info?.loaded, info?.error, info?.configured,
-          JSON.stringify(info?.data ?? {}),
-        ].join("~");
-        if (key !== cardKey) {
-          cardKey = key;
-          mode = "card";
-          clear(leftBody);
-          leftBody.append(renderIntegrationCard(task, hooks));
-        }
-      }
-
-      jump.style.display = detailOpen ? "none" : "";
-
-      const others = State.otherTasks.slice(0, 4);
-      const pillKey = others.map((t) => `${t.id}:${t.pillBadge ?? ""}`).join("|");
-      if (pillKey !== pillIds) {
-        pillIds = pillKey;
-        clear(pills);
-        for (const t of others) pills.append(buildPill(t, actions));
-        pruneMiniBots();
-      }
+      const selected = task?.monitorOwned ? State.agentMonitor.selected(task.id.slice(6)) : undefined;
+      const elapsed = performance.now() - lastSync;
+      // Both subscription updates and Island's dirty frames enter this gate.
+      if (!task?.monitorOwned || task.id !== lastFocus || navigationDirty
+        || JSON.stringify(selected?.key ?? null) !== renderedSelection || elapsed >= 250) render();
+      else if (timer === null) timer = window.setTimeout(render, Math.max(0, 250 - elapsed));
     },
   };
+  State.subscribe(() => {
+    if (State.view !== lastView) { lastView = State.view; navigationDirty = true; }
+  });
+  State.agentMonitor.subscribe((urgent) => urgent ? render() : host.sync());
+  return host;
 }
 
 function buildPill(task: AgentTask, actions: ViewActions): HTMLElement {
@@ -489,6 +542,7 @@ export function buildViews(
 ): Map<IslandViewName, ViewHost> {
   const map = new Map<IslandViewName, ViewHost>();
   map.set("overview", buildOverview(actions));
+  map.set("agentSession", buildAgentSession(actions));
   map.set("empty", buildEmpty(actions));
   map.set("approval", buildApproval(actions));
   map.set("question", buildQuestion());

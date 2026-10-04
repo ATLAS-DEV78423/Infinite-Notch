@@ -57,6 +57,15 @@ Grille compact : pastilles Ø 9,5 autour du point (largeur − 27, hN/2), écart
 
 ## 5. Vues (mode expanded, largeur 640)
 
+Exception expérimentale Tauri : `agentSession` fait 640 × 280 dans le panneau
+720 × 320, Mochi unique centré en (42, 68), diamètre 32, sans colonne latérale.
+Les autres vues gardent leurs dimensions. Deux cartes défilantes affichent des
+métadonnées locales minimales et des approbations passives (jamais Autoriser/Refuser).
+Retour/Échap revient à l'aperçu; focus et défilement restent stables. Les données
+visibles sont effacées à la fermeture de session/pause; seuls des identifiants
+opaques anti-rejeu, bornés et temporaires, peuvent subsister. Vérification native
+et adaptation SwiftUI encore requises; voir la spécification session-inspector.
+
 Structure commune : en-tête de 34 pt (onglets à gauche : Vue d'ensemble, Demander, Déposer ; à droite : « N en cours » + bouton son). Contenu inséré de 36 en haut, 10 à gauche, droite, bas. Cartes : rayon 20, fond `#141518`, bord blanc 3,5 %. Dans les vues autres que `overview`, les mini-bonhommes passent en **colonne** à droite (Ø 16, x = largeur − 31, y = 50 + i × 24) et la carte laisse 42 pt à droite.
 
 Voile de couleur des cartes : dégradé radial depuis le bas (120 % × 90 %, centre 50 % / 130 %), couleur de l'état :
@@ -244,4 +253,3 @@ Chaque jalon se termine par build + capture + comparaison aux références + com
 - Une session Claude Code n'est jamais bloquée par l'app (app fermée, plantée ou lente → le terminal prend le relais).
 - Hidden = 0 % CPU ; compact < 3 % ; mémoire < 100 Mo.
 - La démo (⌃⌥⌘D) se filme d'une traite sans intervention.
-

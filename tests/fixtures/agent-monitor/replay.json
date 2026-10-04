@@ -1,0 +1,253 @@
+[
+  {
+    "name": "healthy-session",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "UserPromptSubmit", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "thinking", "directory_known": true, "turn_id": "t1"}}},
+      {"at_ms": 100, "packet": {"hook_event_name": "PreToolUse", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 2, "scope": "session", "status": "working", "directory_known": true, "turn_id": "t1", "files": [{"id": "f1", "tool_call_id": "read1", "path": "src/main.ts", "action": "read", "state": "running"}], "tools": [{"id": "read1", "name": "read", "state": "running", "target": "src/main.ts"}]}}},
+      {"at_ms": 200, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 3, "scope": "session", "status": "awaiting_approval", "directory_known": true, "turn_id": "t1", "files": [{"id": "f1", "tool_call_id": "read1", "path": "src/main.ts", "action": "read", "state": "running"}], "tools": [{"id": "read1", "name": "read", "state": "running"}, {"id": "cmd1", "name": "terminal", "state": "pending", "command": "git diff --stat"}], "approvals": [{"id": "a1", "request_id": "r1", "tool_call_id": "cmd1", "state": "pending", "command": "git diff --stat"}, {"id": "a2", "request_id": "r2", "state": "pending", "target": "src/other.ts"}]}}},
+      {"at_ms": 300, "packet": {"hook_event_name": "PostToolUse", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 4, "scope": "session", "status": "awaiting_approval", "directory_known": true, "turn_id": "t1", "files": [{"id": "f1", "tool_call_id": "read1", "path": "src/main.ts", "action": "read", "state": "completed"}], "tools": [{"id": "read1", "name": "read", "state": "completed"}, {"id": "cmd1", "name": "terminal", "state": "pending"}], "approvals": [{"id": "a1", "request_id": "r1", "tool_call_id": "cmd1", "state": "pending"}, {"id": "a2", "request_id": "r2", "state": "pending"}]}}},
+      {"at_ms": 400, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 5, "scope": "session", "status": "awaiting_approval", "directory_known": true, "turn_id": "t1", "approvals": [{"id": "a1", "request_id": "r1", "state": "approved"}, {"id": "a2", "request_id": "r2", "state": "pending"}]}}},
+      {"at_ms": 500, "packet": {"hook_event_name": "Stop", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 6, "scope": "session", "status": "finished", "directory_known": true, "turn_id": "t1", "outcome": "completed", "approvals": [{"id": "a1", "request_id": "r1", "state": "approved"}, {"id": "a2", "request_id": "r2", "state": "approved"}], "usage": {"context": {"tokens": 32000, "limit": 128000, "quality": "reported", "accounting": "includes_cache"}, "totals": {"scope": "session", "input": 96000, "output": 2400, "cache_read": 16000, "accounting": "includes_cache"}}}}},
+      {"at_ms": 600, "packet": {"hook_event_name": "SessionEnd", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 7, "scope": "session", "status": "ended", "directory_known": false}}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted"],
+      "checkpoints": [
+        {"after": 1, "checks": [{"path": "/sessions/0/monitor/files/0/state", "equals": "running"}, {"path": "/sessions/0/cwd", "equals": "/fixture/alpha"}]},
+        {"after": 3, "checks": [{"path": "/sessions/0/monitor/files/0/state", "equals": "completed"}, {"path": "/sessions/0/monitor/approvals/0/state", "equals": "pending"}, {"path": "/sessions/0/monitor/approvals/1/state", "equals": "pending"}, {"path": "/badges/opencode", "equals": "approval"}]},
+        {"after": 4, "checks": [{"path": "/sessions/0/monitor/approvals/0/state", "equals": "approved"}, {"path": "/sessions/0/monitor/approvals/1/state", "equals": "pending"}]},
+        {"after": 5, "checks": [{"path": "/sessions/0/context_fraction", "equals": 0.25}, {"path": "/sessions/0/monitor/usage/totals/input", "equals": 96000}, {"path": "/sessions/0/monitor/outcome", "equals": "completed"}, {"path": "/badges/opencode", "equals": "finished"}]},
+        {"after": 6, "checks": [{"path": "/sessions", "equals": []}, {"path": "/selected/opencode", "equals": null}, {"path": "/badges/opencode", "equals": null}]}
+      ]
+    }
+  },
+  {
+    "name": "agent-emitter-session-and-parent-isolation",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": true, "model": "model-a", "subagents": [{"id": "child1", "session_id": "child", "state": "running"}]}}},
+      {"at_ms": 10, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "session_id": "s1", "cwd": "/fixture/beta", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "thinking", "directory_known": true, "model": "model-h", "usage": {"totals": {"scope": "observed", "input": 7, "accounting": "unknown"}}}}},
+      {"at_ms": 20, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/beta", "coucou_monitor": {"version": 1, "emitter_id": "e2", "sequence": 1, "scope": "session", "status": "awaiting_approval", "directory_known": true, "approvals": [{"id": "a1", "request_id": "r1", "state": "pending"}]}}},
+      {"at_ms": 30, "packet": {"hook_event_name": "SubagentStart", "coucou_agent": "opencode", "session_id": "child", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": true, "parent_session_id": "s1"}}},
+      {"at_ms": 40, "packet": {"$fixture": "select", "agent": "opencode", "key": ["opencode", "e2", "session", "s1"]}},
+      {"at_ms": 50, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 2, "scope": "session", "status": "working", "directory_known": true, "model": "model-a", "subagents": [{"id": "child1", "session_id": "child", "state": "running"}]}}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "accepted", "accepted", "selected", "accepted"],
+      "checkpoints": [
+        {"after": 3, "checks": [{"path": "/counts", "equals": {"opencode": 3, "hermes": 1}}, {"path": "/selected/opencode", "equals": ["opencode", "e1", "session", "s1"]}, {"path": "/sessions/0/cwd", "equals": "/fixture/beta"}, {"path": "/sessions/0/monitor/usage/totals/input", "equals": 7}, {"path": "/sessions/1/monitor/parent_session_id", "equals": "s1"}, {"path": "/sessions/2/cwd", "equals": "/fixture/alpha"}, {"path": "/sessions/2/monitor/model", "equals": "model-a"}, {"path": "/sessions/2/monitor/approvals", "absent": true}, {"path": "/sessions/3/monitor/approvals/0/state", "equals": "pending"}]},
+        {"after": 5, "checks": [{"path": "/selected/opencode", "equals": ["opencode", "e2", "session", "s1"]}, {"path": "/badges/opencode", "equals": "approval"}, {"path": "/sessions/2/monitor/sequence", "equals": 2}, {"path": "/sessions/0/monitor/sequence", "equals": 1}]}
+      ]
+    }
+  },
+  {
+    "name": "stale-stop-and-duplicate-do-not-run-canonical-effects",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "PreToolUse", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 4, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 10, "packet": {"hook_event_name": "Stop", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 3, "scope": "session", "status": "finished", "directory_known": false, "outcome": "completed"}}},
+      {"at_ms": 20, "packet": {"hook_event_name": "StopFailure", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 4, "scope": "session", "status": "failed", "directory_known": false}}},
+      {"at_ms": 30, "packet": {"hook_event_name": "Stop", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 9, "emitter_id": "e1", "sequence": 5, "scope": "session", "status": "finished", "directory_known": false}}},
+      {"at_ms": 40, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 9, "emitter_id": "e1", "sequence": 5, "scope": "session", "status": "finished", "directory_known": false}}}
+    ],
+    "expected": {
+      "results": ["accepted", "stale", "stale", "legacy", "ignored"],
+      "checkpoints": [
+        {"after": 2, "checks": [{"path": "/canonical", "equals": ["PreToolUse"]}, {"path": "/sessions/0/monitor/status", "equals": "working"}, {"path": "/sessions/0/received_at_ms", "equals": 0}, {"path": "/last_result", "equals": {"disposition": "stale", "key": ["opencode", "e1", "session", "s1"], "status_changed": false}}]},
+        {"after": 4, "checks": [{"path": "/canonical", "equals": ["PreToolUse", "Stop"]}, {"path": "/sessions/0/monitor/sequence", "equals": 4}]}
+      ]
+    }
+  },
+  {
+    "name": "retry-failure-idle-new-turn-and-old-finish-timer",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 1, "scope": "session", "status": "retrying", "directory_known": false, "turn_id": "t1", "activity": [{"id": "retry1", "kind": "retry", "attempt": 2}]}}},
+      {"at_ms": 50, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 2, "scope": "session", "status": "ratelimited", "directory_known": false, "turn_id": "t1", "activity": [{"id": "rate1", "kind": "rate_limit"}]}}},
+      {"at_ms": 100, "packet": {"hook_event_name": "StopFailure", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 3, "scope": "session", "status": "failed", "directory_known": false, "turn_id": "t1", "outcome": "incomplete"}}},
+      {"at_ms": 200, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 4, "scope": "session", "status": "idle", "directory_known": false, "turn_id": "t1"}}},
+      {"at_ms": 300, "packet": {"hook_event_name": "UserPromptSubmit", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 5, "scope": "session", "status": "thinking", "directory_known": false, "turn_id": "t2"}}},
+      {"at_ms": 400, "packet": {"hook_event_name": "Stop", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 6, "scope": "session", "status": "finished", "directory_known": false, "turn_id": "t2", "outcome": "completed"}}},
+      {"at_ms": 500, "packet": {"hook_event_name": "UserPromptSubmit", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 7, "scope": "session", "status": "thinking", "directory_known": false, "turn_id": "t3"}}},
+      {"at_ms": 5600, "packet": {"$fixture": "finish", "key": ["hermes", "h1", "session", "s1"], "turn_id": "t2"}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "animation_ignored"],
+      "checkpoints": [
+        {"after": 1, "checks": [{"path": "/badges/hermes", "equals": null}, {"path": "/sessions/0/monitor/status", "equals": "ratelimited"}]},
+        {"after": 3, "checks": [{"path": "/sessions/0/monitor/status", "equals": "failed"}, {"path": "/sessions/0/monitor/outcome", "equals": "incomplete"}, {"path": "/sessions/0/monitor/sequence", "equals": 4}, {"path": "/badges/hermes", "equals": "error"}]},
+        {"after": 4, "checks": [{"path": "/sessions/0/monitor/status", "equals": "thinking"}, {"path": "/sessions/0/monitor/outcome", "absent": true}, {"path": "/sessions/0/monitor/activity", "absent": true}]},
+        {"after": 7, "checks": [{"path": "/sessions/0/monitor/turn_id", "equals": "t3"}, {"path": "/sessions/0/monitor/status", "equals": "thinking"}, {"path": "/counts/hermes", "equals": 1}]}
+      ]
+    }
+  },
+  {
+    "name": "context-compaction-model-switch-and-unknown-counters",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false, "model": "m1", "usage": {"context": {"tokens": 32000, "limit": 128000, "quality": "reported", "accounting": "includes_cache"}, "totals": {"scope": "session", "input": 96000, "cache_read": 16000, "accounting": "includes_cache"}}}}},
+      {"at_ms": 10, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 2, "scope": "session", "status": "compacting", "directory_known": false, "model": "m1", "activity": [{"id": "compact1", "kind": "compaction"}], "usage": {"context": {"tokens": 12000, "limit": 128000, "quality": "reported", "accounting": "includes_cache"}, "totals": {"scope": "session", "input": 128000, "accounting": "includes_cache"}}}}},
+      {"at_ms": 20, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 3, "scope": "session", "status": "working", "directory_known": false, "model": "m2", "usage": {"context": {"tokens": 10000, "quality": "reported", "accounting": "includes_cache"}, "totals": {"scope": "observed", "partial": true, "input": 138000, "accounting": "unknown"}}}}},
+      {"at_ms": 30, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 4, "scope": "session", "status": "working", "directory_known": false, "usage": {"context": {"tokens": 0, "limit": 0, "quality": "reported", "accounting": "includes_cache"}}}}},
+      {"at_ms": 40, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 5, "scope": "session", "status": "working", "directory_known": false, "usage": {"context": {"tokens": 100, "limit": 200, "quality": "estimated", "accounting": "includes_cache"}}}}},
+      {"at_ms": 50, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 6, "scope": "session", "status": "working", "directory_known": false, "usage": {"context": {"tokens": -1, "limit": 200, "quality": "reported", "accounting": "includes_cache"}, "totals": {"scope": "session", "input": 138000, "accounting": "includes_cache"}}}}},
+      {"at_ms": 60, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 7, "scope": "session", "status": "working", "directory_known": false}}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted"],
+      "checkpoints": [
+        {"after": 0, "checks": [{"path": "/sessions/0/context_fraction", "equals": 0.25}]},
+        {"after": 1, "checks": [{"path": "/sessions/0/context_fraction", "equals": 0.09375}, {"path": "/sessions/0/monitor/usage/totals/input", "equals": 128000}]},
+        {"after": 2, "checks": [{"path": "/sessions/0/context_fraction", "equals": null}, {"path": "/sessions/0/monitor/usage/context/limit", "absent": true}, {"path": "/sessions/0/monitor/usage/totals/partial", "equals": true}]},
+        {"after": 3, "checks": [{"path": "/sessions/0/context_fraction", "equals": null}, {"path": "/sessions/0/monitor/usage/context/tokens", "equals": 0}]},
+        {"after": 4, "checks": [{"path": "/sessions/0/context_fraction", "equals": 0.5}, {"path": "/sessions/0/monitor/usage/context/quality", "equals": "estimated"}]},
+        {"after": 5, "checks": [{"path": "/sessions/0/monitor/usage/context", "absent": true}, {"path": "/sessions/0/monitor/usage/totals/input", "equals": 138000}]},
+        {"after": 6, "checks": [{"path": "/sessions/0/monitor/usage", "absent": true}, {"path": "/sessions/0/context_fraction", "equals": null}]}
+      ]
+    }
+  },
+  {
+    "name": "quiet-connected-tool-versus-emitter-loss",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false, "tools": [{"id": "c1", "name": "terminal", "state": "running", "command": "sleep 60"}]}}},
+      {"at_ms": 9999, "packet": {"hook_event_name": "AgentDisplayAlive", "coucou_agent": "opencode", "coucou_monitor": {"version": 1, "emitter_id": "e1", "active_session_ids": ["s1"]}}},
+      {"at_ms": 19999, "packet": {"hook_event_name": "AgentDisplayAlive", "coucou_agent": "opencode", "coucou_monitor": {"version": 1, "emitter_id": "e1", "active_session_ids": ["s1"]}}},
+      {"at_ms": 29999, "packet": {"hook_event_name": "AgentDisplayAlive", "coucou_agent": "opencode", "coucou_monitor": {"version": 1, "emitter_id": "e1", "active_session_ids": ["s1"]}}},
+      {"at_ms": 30000, "packet": null},
+      {"at_ms": 59998, "packet": null},
+      {"at_ms": 59999, "packet": null},
+      {"at_ms": 60000, "packet": {"hook_event_name": "AgentDisplayAlive", "coucou_agent": "opencode", "coucou_monitor": {"version": 1, "emitter_id": "e1", "active_session_ids": ["s1"]}}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "accepted", "accepted", "pruned", "pruned", "pruned", "ignored"],
+      "checkpoints": [
+        {"after": 4, "checks": [{"path": "/counts/opencode", "equals": 1}, {"path": "/sessions/0/content_stale", "equals": true}, {"path": "/sessions/0/received_at_ms", "equals": 0}, {"path": "/sessions/0/monitor/status", "equals": "working"}]},
+        {"after": 5, "checks": [{"path": "/counts/opencode", "equals": 1}]},
+        {"after": 6, "checks": [{"path": "/sessions", "equals": []}, {"path": "/observations", "equals": []}]},
+        {"after": 7, "checks": [{"path": "/sessions", "equals": []}, {"path": "/selected/opencode", "equals": null}]}
+      ]
+    }
+  },
+  {
+    "name": "content-does-not-renew-first-heartbeat-grace",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 29000, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 2, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 29999, "packet": null},
+      {"at_ms": 30000, "packet": null}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "pruned", "pruned"],
+      "checkpoints": [
+        {"after": 2, "checks": [{"path": "/counts/hermes", "equals": 1}, {"path": "/sessions/0/content_stale", "equals": false}]},
+        {"after": 3, "checks": [{"path": "/sessions", "equals": []}, {"path": "/badges/hermes", "equals": null}]}
+      ]
+    }
+  },
+  {
+    "name": "roster-reset-and-emitter-clear-isolation",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "old", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": true}}},
+      {"at_ms": 10, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "other", "cwd": "/fixture/beta", "coucou_monitor": {"version": 1, "emitter_id": "e2", "sequence": 1, "scope": "session", "status": "working", "directory_known": true}}},
+      {"at_ms": 20, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "old", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 2, "scope": "session", "status": "ended", "directory_known": false}}},
+      {"at_ms": 30, "packet": {"hook_event_name": "SessionStart", "coucou_agent": "opencode", "session_id": "new", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "idle", "directory_known": false}}},
+      {"at_ms": 40, "packet": {"hook_event_name": "AgentDisplayAlive", "coucou_agent": "opencode", "coucou_monitor": {"version": 1, "emitter_id": "e1", "active_session_ids": "invalid-not-an-array"}}},
+      {"at_ms": 50, "packet": {"hook_event_name": "AgentDisplayAlive", "coucou_agent": "opencode", "coucou_monitor": {"version": 1, "emitter_id": "e1", "active_session_ids": []}}},
+      {"at_ms": 60, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "coucou_monitor": {"version": 1, "emitter_id": "e2", "sequence": 1, "scope": "agent", "status": "ended", "directory_known": false}}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "accepted", "accepted", "ignored", "accepted", "accepted"],
+      "checkpoints": [
+        {"after": 3, "checks": [{"path": "/counts/opencode", "equals": 2}, {"path": "/sessions/0/key", "equals": ["opencode", "e1", "session", "new"]}, {"path": "/sessions/0/cwd", "absent": true}, {"path": "/sessions/1/cwd", "equals": "/fixture/beta"}]},
+        {"after": 4, "checks": [{"path": "/counts/opencode", "equals": 2}]},
+        {"after": 5, "checks": [{"path": "/counts/opencode", "equals": 1}, {"path": "/sessions/0/key", "equals": ["opencode", "e2", "session", "other"]}]},
+        {"after": 6, "checks": [{"path": "/sessions", "equals": []}, {"path": "/observations", "equals": []}]}
+      ]
+    }
+  },
+  {
+    "name": "hermes-uncorrelated-approval-stays-agent-level",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 1, "scope": "agent", "status": "awaiting_approval", "directory_known": false, "approvals": [{"id": "a1", "state": "pending", "command": "git diff --stat"}, {"id": "a2", "state": "pending", "command": "git diff --stat"}]}}},
+      {"at_ms": 10, "packet": {"hook_event_name": "PostToolUse", "coucou_agent": "hermes", "session_id": "focused", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false, "tools": [{"id": "c1", "name": "terminal", "state": "completed"}]}}},
+      {"at_ms": 20, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 2, "scope": "agent", "status": "unknown", "directory_known": false, "approvals": [{"id": "a1", "state": "unknown"}, {"id": "a2", "state": "unknown"}]}}},
+      {"at_ms": 30, "packet": {"hook_event_name": "AgentDisplayAlive", "coucou_agent": "hermes", "coucou_monitor": {"version": 1, "emitter_id": "h1", "active_session_ids": []}}},
+      {"at_ms": 40, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "hermes", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 3, "scope": "agent", "status": "ended", "directory_known": false}}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "accepted", "accepted", "accepted"],
+      "checkpoints": [
+        {"after": 0, "checks": [{"path": "/sessions", "equals": []}, {"path": "/observations/0/approval/request_id", "absent": true}, {"path": "/badges/hermes", "equals": "approval"}]},
+        {"after": 1, "checks": [{"path": "/sessions/0/monitor/approvals", "absent": true}, {"path": "/observations/0/approval/state", "equals": "pending"}, {"path": "/observations/1/approval/state", "equals": "pending"}]},
+        {"after": 3, "checks": [{"path": "/sessions", "equals": []}, {"path": "/observations/0/approval/state", "equals": "unknown"}, {"path": "/observations/1/approval/state", "equals": "unknown"}]},
+        {"after": 4, "checks": [{"path": "/observations", "equals": []}, {"path": "/badges/hermes", "equals": null}]}
+      ]
+    }
+  },
+  {
+    "name": "seventeenth-session-never-evicts-or-merges",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s01", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "awaiting_approval", "directory_known": false, "approvals": [{"id": "a1", "state": "pending"}]}}},
+      {"at_ms": 1, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s02", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 2, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s03", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 3, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s04", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 4, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s05", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 5, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s06", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 6, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s07", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 7, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s08", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 8, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s09", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 9, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s10", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 10, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s11", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 11, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s12", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 12, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s13", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 13, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s14", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 14, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s15", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 15, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s16", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 16, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s17", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 17, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s17", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 2, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 18, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s01", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 2, "scope": "session", "status": "ended", "directory_known": false}}},
+      {"at_ms": 19, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s17", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 3, "scope": "session", "status": "working", "directory_known": false}}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "accepted", "ignored", "ignored", "accepted", "accepted"],
+      "checkpoints": [
+        {"after": 17, "checks": [{"path": "/counts/opencode", "equals": 16}, {"path": "/overflow/opencode", "equals": 1}, {"path": "/selected/opencode", "equals": ["opencode", "e1", "session", "s01"]}, {"path": "/sessions/15/key", "equals": ["opencode", "e1", "session", "s16"]}, {"path": "/badges/opencode", "equals": "approval"}]},
+        {"after": 18, "checks": [{"path": "/counts/opencode", "equals": 15}, {"path": "/overflow/opencode", "equals": 0}, {"path": "/selected/opencode", "equals": ["opencode", "e1", "session", "s16"]}]},
+        {"after": 19, "checks": [{"path": "/counts/opencode", "equals": 16}, {"path": "/sessions/15/key", "equals": ["opencode", "e1", "session", "s17"]}, {"path": "/selected/opencode", "equals": ["opencode", "e1", "session", "s16"]}]}
+      ]
+    }
+  },
+  {
+    "name": "clear-pause-resume-discards-old-generation",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 1, "scope": "session", "status": "working", "directory_known": true, "tools": [{"id": "c1", "name": "read", "state": "running", "target": "private-fixture.txt"}]}}},
+      {"at_ms": 10, "packet": {"$fixture": "clear"}},
+      {"at_ms": 20, "packet": {"$fixture": "deliver", "generation": 0, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "cwd": "/fixture/alpha", "coucou_monitor": {"version": 1, "emitter_id": "e1", "sequence": 2, "scope": "session", "status": "working", "directory_known": true}}}},
+      {"at_ms": 30, "packet": {"$fixture": "resume"}},
+      {"at_ms": 40, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e2", "sequence": 1, "scope": "session", "status": "thinking", "directory_known": false}}},
+      {"at_ms": 50, "packet": {"$fixture": "pause"}},
+      {"at_ms": 60, "packet": {"hook_event_name": "AgentDisplayUpdate", "coucou_agent": "opencode", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "e2", "sequence": 2, "scope": "session", "status": "working", "directory_known": false}}},
+      {"at_ms": 70, "packet": {"$fixture": "resume"}},
+      {"at_ms": 80, "packet": null}
+    ],
+    "expected": {
+      "results": ["accepted", "cleared", "ignored", "resumed", "accepted", "paused", "ignored", "resumed", "pruned"],
+      "checkpoints": [
+        {"after": 2, "checks": [{"path": "/sessions", "equals": []}, {"path": "/observations", "equals": []}, {"path": "/selected/opencode", "equals": null}, {"path": "/generation", "equals": 1}]},
+        {"after": 4, "checks": [{"path": "/sessions/0/key", "equals": ["opencode", "e2", "session", "s1"]}, {"path": "/sessions/0/cwd", "absent": true}, {"path": "/sessions/0/monitor/tools", "absent": true}]},
+        {"after": 6, "checks": [{"path": "/sessions", "equals": []}, {"path": "/paused", "equals": true}, {"path": "/generation", "equals": 3}]},
+        {"after": 8, "checks": [{"path": "/sessions", "equals": []}, {"path": "/paused", "equals": false}, {"path": "/generation", "equals": 4}, {"path": "/badges/opencode", "equals": null}]}
+      ]
+    }
+  },
+  {
+    "name": "prohibited-content-and-unsafe-command-never-enter-state",
+    "events": [
+      {"at_ms": 0, "packet": {"hook_event_name": "StopFailure", "coucou_agent": "hermes", "session_id": "s1", "prompt": "FAKE_PROMPT", "assistant_response": "FAKE_RESPONSE", "environment": {"TOKEN": "FAKE_TOKEN"}, "terminal": "FAKE_TTY", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 1, "scope": "session", "status": "failed", "directory_known": false, "outcome": "failed", "title": "FAKE_TITLE", "final_summary": "FAKE_SUMMARY", "error": "FAKE_RAW_ERROR", "tools": [{"id": "c1", "name": "terminal", "state": "failed", "command": "TOKEN=FAKE_TOKEN curl --password FAKE_PASSWORD -H 'Authorization: Bearer FAKE_BEARER' https://fake:FAKE_USERINFO@example.invalid/a?key=FAKE_QUERY\nFAKE_FREE_TEXT", "error": "FAKE_TOOL_ERROR"}], "subagents": [{"id": "child1", "state": "failed", "summary": "FAKE_CHILD_SUMMARY", "goal": "FAKE_GOAL", "role": "FAKE_ROLE"}], "activity": [{"id": "err1", "kind": "error", "text": "FAKE_ERROR_TEXT"}]}}},
+      {"at_ms": 10, "packet": {"hook_event_name": "UserPromptSubmit", "coucou_agent": "hermes", "session_id": "s1", "coucou_monitor": {"version": 1, "emitter_id": "h1", "sequence": 2, "scope": "session", "status": "thinking", "directory_known": false}}}
+    ],
+    "expected": {
+      "results": ["accepted", "accepted"],
+      "checkpoints": [
+        {"after": 0, "checks": [{"path": "/sessions/0/monitor", "equals": {"version": 1, "emitter_id": "h1", "sequence": 1, "scope": "session", "status": "failed", "directory_known": false, "outcome": "failed", "tools": [{"id": "c1", "name": "terminal", "state": "failed"}], "subagents": [{"id": "child1", "state": "failed"}], "activity": [{"id": "err1", "kind": "error"}]}}, {"path": "/sessions/0/prompt", "absent": true}, {"path": "/sessions/0/assistant_response", "absent": true}, {"path": "/sessions/0/environment", "absent": true}, {"path": "/sessions/0/terminal", "absent": true}]},
+        {"after": 1, "checks": [{"path": "/sessions/0/monitor/tools", "absent": true}, {"path": "/sessions/0/monitor/outcome", "absent": true}, {"path": "/sessions/0/monitor/activity", "absent": true}]}
+      ]
+    }
+  }
+]

@@ -2,6 +2,7 @@
 
 import type { BotEmoteName, BotStateName, IslandMode, IslandViewName } from "./layout";
 import type { EyeShape } from "../mochi/engine";
+import { AgentMonitorStore, monitorStatusText } from "./agent-monitor";
 
 export type AgentSource = "claudeCode" | "n8n" | "agent";
 export type PillBadge = "approval" | "finished" | "error";
@@ -19,6 +20,7 @@ export interface AgentTask {
   miniEye?: EyeShape | null;
   pillBadge?: PillBadge | null;
   sessionCwd?: string | null;
+  monitorOwned?: boolean;
 }
 
 export interface ApprovalInfo {
@@ -111,6 +113,34 @@ export const DEFAULT_SETTINGS: Settings = {
 type Listener = () => void;
 
 class AppState {
+  readonly agentMonitor = new AgentMonitorStore();
+  /** Interaction hold, independent of a real Claude approval pin. */
+  inspectorHold = false;
+
+  constructor() {
+    this.agentMonitor.subscribe(() => {
+      for (const agent of ["opencode", "hermes"]) {
+        const selected = this.agentMonitor.selected(agent);
+        const observations = this.agentMonitor.observations(agent);
+        const id = `agent_${agent}`;
+        if (selected || observations.length) this.upsertExternalAgent(id, agent === "opencode" ? "OpenCode" : "Hermes", agent === "opencode" ? "#60A5FA" : "#EAB308");
+        const task = this.tasks.find((t) => t.id === id);
+        if (!task || (!task.monitorOwned && !selected && !observations.length)) continue;
+        task.monitorOwned = true;
+        task.name = agent === "opencode" ? "OpenCode" : "Hermes";
+        const status = selected?.packet.monitor.status;
+        task.state = status === "thinking" || status === "retrying" || status === "compacting" ? "thinking"
+          : status === "working" ? "working" : status === "awaiting_approval" ? "approval"
+          : status === "ratelimited" ? "ratelimit" : status === "failed" ? "error" : status === "finished" ? "finished" : "idle";
+        task.steps = selected ? [monitorStatusText[selected.packet.monitor.status]] : observations.length ? ["Approval observed — answer in your agent"] : [];
+        task.stepIndex = 0;
+        task.sessionCwd = selected?.packet.cwd ?? null;
+        task.pillBadge = this.agentMonitor.badge(agent);
+      }
+      this.notify();
+    });
+  }
+
   mode: IslandMode = "hidden";
   view: IslandViewName = "overview";
 
@@ -126,6 +156,11 @@ class AppState {
 
   isPinned = false;
   paused = false;
+
+  setPaused(paused: boolean) {
+    this.paused = paused;
+    this.agentMonitor.setPaused(paused);
+  }
 
   uploadProgress = 0;
   uploadDuration = 2.4;
@@ -172,7 +207,7 @@ class AppState {
     const t = this.tasks.find((x) => x.id === id);
     if (!t) return;
     this.focusId = id;
-    t.pillBadge = null;
+    t.pillBadge = t.monitorOwned ? this.agentMonitor.badge(id.slice(6)) : null;
     this.notify();
   }
 

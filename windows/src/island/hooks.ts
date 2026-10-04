@@ -14,6 +14,7 @@ const CLAUDE_ID = "integration_claude";
 let pendingTimeout: number | null = null;
 
 interface HookPayload {
+  coucou_monitor?: unknown;
   hook_event_name?: string;
   request_id?: string;
   session_id?: string;
@@ -138,9 +139,25 @@ function clearSession() {
 
 export function registerHookHandlers(island: Island) {
   void onEvent<HookPayload>("hook", (payload) => handleHook(island, payload));
+  // Liveness expiry runs even while Details is held or the island is hidden.
+  window.setInterval(() => State.agentMonitor.prune(performance.now()), 1000);
 }
 
-function handleHook(island: Island, payload: HookPayload) {
+export function handleHook(island: Island, rawPayload: unknown, nowMs = performance.now(), generation = State.agentMonitor.generation) {
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) return;
+  let payload = rawPayload as HookPayload;
+  if (payload.coucou_agent === "opencode" || payload.coucou_agent === "hermes" || Object.prototype.hasOwnProperty.call(payload, "coucou_monitor") || payload.hook_event_name === "AgentDisplayUpdate" || payload.hook_event_name === "AgentDisplayAlive") {
+    if (State.paused) return { disposition: "ignored", status_changed: false } as const;
+    const applied = State.agentMonitor.deliver(payload, nowMs, generation);
+    if (applied.disposition !== "legacy") {
+      if (applied.disposition === "accepted" && State.mode === "hidden" && (State.agentMonitor.sessions(payload.coucou_agent ?? "").length || State.agentMonitor.observations(payload.coucou_agent ?? "").length)) island.reveal();
+      return applied;
+    }
+    // The legacy compatibility path for these adapters is body-free too.
+    // Never pass raw prompt/tool/error/request fields to existing hook handlers.
+    payload = { hook_event_name: payload.hook_event_name, coucou_agent: payload.coucou_agent };
+    if (State.agentMonitor.sessions(payload.coucou_agent!).length || State.agentMonitor.observations(payload.coucou_agent!).length) return applied;
+  }
   if (State.paused) {
     // Silence here used to cost Claude Code nearly two minutes: the relay waited
     // for a decision from an island that had already decided not to look. Say so,
@@ -237,6 +254,7 @@ function handleHook(island: Island, payload: HookPayload) {
       if (focused) surface("finished", true);
       else State.setPillBadge(agentId, "finished");
       window.setTimeout(() => {
+        if (State.tasks.find((t) => t.id === agentId)?.monitorOwned) return;
         if (isExternalAgent) {
           State.removeTask(agentId);
         } else {

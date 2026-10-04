@@ -29,7 +29,7 @@ async function main() {
   /** Pause has to reach Rust too, or the pollers keep calling out. */
   const setPaused = (on: boolean) => {
     if (State.paused === on) return;
-    State.paused = on;
+    State.setPaused(on);
     void Bridge.setPaused(on);
   };
 
@@ -63,6 +63,8 @@ async function main() {
 
   registerHookHandlers(island);
   registerIntegrationHandlers(island);
+
+  window.addEventListener("pagehide", () => State.agentMonitor.clear());
 
   island.launch();
 

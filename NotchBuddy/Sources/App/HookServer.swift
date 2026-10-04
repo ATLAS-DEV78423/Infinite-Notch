@@ -279,6 +279,25 @@ final class HookServer: @unchecked Sendable {
             return
         }
 
+        // Private packets never reach statusline/question/approval routes, even
+        // when malformed. Classify before discarding unknown fields or logging.
+        if Self.isPrivateEvent(payload) {
+            guard raw.count <= 65_536, String(data: raw, encoding: .utf8) != nil else {
+                close(fd)
+                return
+            }
+            let eventName = payload["hook_event_name"] as? String ?? ""
+            if eventName != "PermissionRequest" {
+                let displayPayload = Self.privateFields(payload)
+                guard let serialized = try? JSONSerialization.data(withJSONObject: displayPayload, options: .withoutEscapingSlashes),
+                      serialized.count <= 65_536 else { close(fd); return }
+                Task { @MainActor in self.processEvent(name: eventName, payload: displayPayload, privateEvent: true) }
+            }
+            sendLine(fd: fd, text: #"{"ok":true}"#)
+            close(fd)
+            return
+        }
+
         let coucouKind = payload["coucou_kind"] as? String ?? ""
 
         // statusline payloads are handled separately — no session, no reveal, no sound
@@ -322,7 +341,7 @@ final class HookServer: @unchecked Sendable {
     // When not focused: state updates animate the mini bot in the pill; badge shown for alerts.
 
     @MainActor
-    private func processEvent(name: String, payload: [String: Any]) {
+    private func processEvent(name: String, payload: [String: Any], privateEvent: Bool = false) {
         let state = AppState.shared
         let sessionId = payload["session_id"] as? String
                      ?? payload["conversation_id"] as? String
@@ -371,7 +390,7 @@ final class HookServer: @unchecked Sendable {
             agentId = "integration_claude"
             isExternalAgent = false
         } else {
-            nbLog("Ignored \(name) from \(termProgram.isEmpty ? bundleId : termProgram) (\(projectName))")
+            if !privateEvent { nbLog("Ignored \(name) from \(termProgram.isEmpty ? bundleId : termProgram) (\(projectName))") }
             return
         }
 
@@ -414,7 +433,7 @@ final class HookServer: @unchecked Sendable {
         case "SessionStart":
             activeSessionId = sessionId
             if isExternalAgent { upsertExternalAgent(id: agentId, name: validAgent!) } else { upsertWorkspaceTask(id: agentId, projectName: projectName, cwd: cwd) }
-            nbLog("SessionStart \(isExternalAgent ? agentId : projectName) (\(sessionId.prefix(8)))")
+            if !privateEvent { nbLog("SessionStart \(isExternalAgent ? agentId : projectName) (\(sessionId.prefix(8)))") }
             if state.isPresent { expandIfNeeded(to: .overview) }
             SoundEngine.shared.play("work")
 
@@ -438,7 +457,7 @@ final class HookServer: @unchecked Sendable {
             let input = payload["tool_input"] as? [String: Any] ?? [:]
             let step = frenchStep(tool: tool, input: input)
             appendStep(id: agentId, step: step)
-            nbLog("PreToolUse \(tool)")
+            if !privateEvent { nbLog("PreToolUse \(tool)") }
 
         case "PostToolUse":
             state.updateTask(id: agentId, state: .working)
@@ -509,6 +528,77 @@ final class HookServer: @unchecked Sendable {
     }
 
     // MARK: - Agent validation + dynamic pill
+
+    private static func isPrivateEvent(_ payload: [String: Any]) -> Bool {
+        let agent = payload["coucou_agent"] as? String ?? ""
+        let event = payload["hook_event_name"] as? String ?? ""
+        return agent == "opencode" || agent == "hermes"
+            || event == "AgentDisplayUpdate" || event == "AgentDisplayAlive"
+            || payload["coucou_monitor"] != nil
+    }
+
+    // Direct socket clients need the relay allowlist too. This does not replace
+    // the monitor consumer's bounds, enum validation or safe-preview scrubbing.
+    private static func privateFields(_ payload: [String: Any], group: String = "envelope") -> [String: Any] {
+        let fields: String
+        switch group {
+        case "envelope": fields = "hook_event_name coucou_agent session_id cwd tool_name coucou_monitor"
+        case "coucou_monitor": fields = "version emitter_id sequence scope status directory_known turn_id parent_session_id model provider capabilities files tools approvals subagents activity usage outcome overflow truncated_fields active_session_ids"
+        case "files": fields = "id tool_call_id path action state cwd"
+        case "tools": fields = "id name state command target cwd duration_ms"
+        case "approvals": fields = "id request_id tool_call_id state command target reason cwd"
+        case "subagents": fields = "id session_id state duration_ms"
+        case "activity": fields = "id kind attempt"
+        case "usage": fields = "context totals"
+        case "context": fields = "tokens limit quality accounting"
+        case "totals": fields = "scope partial input output reasoning cache_read cache_write cost_usd accounting"
+        case "capabilities": fields = "files context approvals subagents compaction"
+        case "overflow": fields = "files tools approvals subagents activity sessions observations"
+        default: fields = ""
+        }
+        var result: [String: Any] = [:]
+        for field in fields.split(separator: " ") {
+            let key = String(field)
+            guard let value = payload[key] else { continue }
+            if group == "envelope" && key == "tool_name" {
+                guard ["PreToolUse", "PostToolUse", "PostToolUseFailure"].contains(payload["hook_event_name"] as? String ?? ""),
+                      let label = value as? String, !label.isEmpty, label.utf8.count <= 256,
+                      label.unicodeScalars.allSatisfy({ scalar in
+                          if "_.:-".unicodeScalars.contains(scalar) { return true }
+                          switch scalar.properties.generalCategory {
+                          case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+                               .decimalNumber, .letterNumber, .otherNumber: return true
+                          default: return false
+                          }
+                      }) else { continue }
+            }
+            if group == "approvals" && key == "reason"
+                && !["permission_required", "policy", "unknown"].contains(value as? String ?? "") { continue }
+            if group == "activity" && key == "kind"
+                && !["retry", "rate_limit", "compaction", "error", "session_reset"].contains(value as? String ?? "") { continue }
+            if group == "coucou_monitor" && key == "outcome" {
+                let status = payload["status"] as? String ?? ""
+                let outcome = value as? String ?? ""
+                guard (status == "finished" && outcome == "completed")
+                    || (status == "failed" && ["failed", "incomplete"].contains(outcome))
+                    || (status == "interrupted" && outcome == "interrupted") else { continue }
+            }
+            if (group == "envelope" && key == "coucou_monitor")
+                || (group == "coucou_monitor" && ["usage", "capabilities", "overflow"].contains(key))
+                || (group == "usage" && ["context", "totals"].contains(key)) {
+                if let object = value as? [String: Any] { result[key] = privateFields(object, group: key) }
+            } else if group == "coucou_monitor" && ["files", "tools", "approvals", "subagents", "activity"].contains(key) {
+                if let rows = value as? [Any] {
+                    result[key] = rows.compactMap { $0 as? [String: Any] }.map { privateFields($0, group: key) }
+                }
+            } else if group == "coucou_monitor" && ["truncated_fields", "active_session_ids"].contains(key) {
+                if let items = value as? [String] { result[key] = items }
+            } else if !(value is [String: Any]) && !(value is [Any]) {
+                result[key] = value
+            }
+        }
+        return result
+    }
 
     /// Validates a coucou_agent name: lowercase, digits and hyphens, 1–24 chars.
     /// "claude" is reserved and rejected so it cannot impersonate the Claude Code pill.
@@ -1831,6 +1921,56 @@ private let nbHookPythonGitHub = """
 # Reads JSON from stdin, forwards to Coucou via Unix socket, translates response.
 import sys, json, os, socket
 
+# Transport allowlist only; receivers still validate bounds, enums and safe previews.
+def private_fields(value, group='envelope'):
+    fields = {
+        'envelope': 'hook_event_name coucou_agent session_id cwd tool_name coucou_monitor',
+        'coucou_monitor': 'version emitter_id sequence scope status directory_known turn_id parent_session_id model provider capabilities files tools approvals subagents activity usage outcome overflow truncated_fields active_session_ids',
+        'files': 'id tool_call_id path action state cwd',
+        'tools': 'id name state command target cwd duration_ms',
+        'approvals': 'id request_id tool_call_id state command target reason cwd',
+        'subagents': 'id session_id state duration_ms',
+        'activity': 'id kind attempt',
+        'usage': 'context totals',
+        'context': 'tokens limit quality accounting',
+        'totals': 'scope partial input output reasoning cache_read cache_write cost_usd accounting',
+        'capabilities': 'files context approvals subagents compaction',
+        'overflow': 'files tools approvals subagents activity sessions observations',
+    }
+    objects = {'envelope': ('coucou_monitor',), 'coucou_monitor': ('usage', 'capabilities', 'overflow'),
+               'usage': ('context', 'totals')}
+    rows = ('files', 'tools', 'approvals', 'subagents', 'activity')
+    result = {}
+    for key in fields[group].split():
+        if key not in value:
+            continue
+        item = value[key]
+        if group == 'envelope' and key == 'tool_name':
+            if (value.get('hook_event_name') not in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure')
+                    or not isinstance(item, str) or not item
+                    or not all(c.isalnum() or c in '_.:-' for c in item)
+                    or len(item.encode('utf-8')) > 256):
+                continue
+        if group == 'approvals' and key == 'reason' and item not in ('permission_required', 'policy', 'unknown'):
+            continue
+        if group == 'activity' and key == 'kind' and item not in ('retry', 'rate_limit', 'compaction', 'error', 'session_reset'):
+            continue
+        if group == 'coucou_monitor' and key == 'outcome' and (value.get('status'), item) not in (
+                ('finished', 'completed'), ('failed', 'failed'), ('failed', 'incomplete'), ('interrupted', 'interrupted')):
+            continue
+        if key in objects.get(group, ()):
+            if isinstance(item, dict):
+                result[key] = private_fields(item, key)
+        elif group == 'coucou_monitor' and key in rows:
+            if isinstance(item, list):
+                result[key] = [private_fields(row, key) for row in item if isinstance(row, dict)]
+        elif group == 'coucou_monitor' and key in ('truncated_fields', 'active_session_ids'):
+            if isinstance(item, list) and all(isinstance(entry, str) for entry in item):
+                result[key] = item
+        elif not isinstance(item, (dict, list)):
+            result[key] = item
+    return result
+
 def normalize_event(name):
     mapping = {
         'BeforeTool': 'PreToolUse', 'BeforeToolSelection': 'PreToolUse',
@@ -1876,14 +2016,54 @@ def main():
             if '--statusline' not in sys.argv[1:]:
                 return
         else:
-            payload = json.loads(raw)
+            payload = json.loads(raw.decode('utf-8-sig'))
     except Exception:
-        if '--statusline' not in sys.argv[1:]:
-            return
+        return  # Malformed input must not escape through a previous statusline command.
 
     socket_path = os.path.expanduser(
         '~/Library/Application Support/NotchBuddy/nb.sock'
     )
+
+    if not isinstance(payload, dict):
+        return
+    args = sys.argv[1:]
+    agent = ''
+    arg_event = ''
+    i = 0
+    while i < len(args):
+        if args[i] == '--agent' and i + 1 < len(args):
+            agent = args[i + 1]
+            i += 2
+        else:
+            if not arg_event:
+                arg_event = args[i]
+            i += 1
+    if agent in ('opencode', 'hermes') and payload.get('coucou_agent') not in ('opencode', 'hermes'):
+        payload['coucou_agent'] = agent
+    elif agent and '--ask' not in args and '--statusline' not in args:
+        payload.setdefault('coucou_agent', agent)
+    event = payload.get('hook_event_name', '') or arg_event
+    if (payload.get('coucou_agent') in ('opencode', 'hermes') or agent in ('opencode', 'hermes')
+            or event in ('AgentDisplayUpdate', 'AgentDisplayAlive') or 'coucou_monitor' in payload):
+        # Passive packets never inherit process context or enter legacy decision modes.
+        if event == 'PermissionRequest' or len(raw[:-1] if raw.endswith(b'\\n') else raw) > 65536:
+            return
+        payload['hook_event_name'] = event
+        payload = private_fields(payload)
+        if (payload.get('coucou_agent') not in ('opencode', 'hermes')
+                and event not in ('AgentDisplayUpdate', 'AgentDisplayAlive') and 'coucou_monitor' not in payload):
+            return  # Do not turn a malformed private packet into a loggable legacy one.
+        try:
+            wire = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+            if len(wire) > 65536:
+                return
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                s.connect(socket_path)
+                s.sendall(wire + b'\\n')
+        except Exception:
+            pass
+        return
 
     # --statusline mode: relay rate_limits to Coucou, then delegate to saved previous
     if '--statusline' in sys.argv[1:]:
@@ -1966,24 +2146,6 @@ def main():
         except Exception:
             pass
         return
-
-    # Parse --agent <name> and optional positional event from argv.
-    # --agent tags the payload with coucou_agent so the app routes to the right pill.
-    # The positional arg is a fallback event name for agents that do not set hook_event_name.
-    args = sys.argv[1:]
-    agent = ''
-    arg_event = ''
-    i = 0
-    while i < len(args):
-        if args[i] == '--agent' and i + 1 < len(args):
-            agent = args[i + 1]
-            i += 2
-        else:
-            if not arg_event:
-                arg_event = args[i]
-            i += 1
-    if agent:
-        payload.setdefault('coucou_agent', agent)
 
     # Enrich with terminal context
     env = os.environ
@@ -2098,6 +2260,56 @@ private let nbHookPythonAppStore = """
 # Socket lives inside the sandboxed container; script runs outside the sandbox.
 import sys, json, os, socket
 
+# Transport allowlist only; receivers still validate bounds, enums and safe previews.
+def private_fields(value, group='envelope'):
+    fields = {
+        'envelope': 'hook_event_name coucou_agent session_id cwd tool_name coucou_monitor',
+        'coucou_monitor': 'version emitter_id sequence scope status directory_known turn_id parent_session_id model provider capabilities files tools approvals subagents activity usage outcome overflow truncated_fields active_session_ids',
+        'files': 'id tool_call_id path action state cwd',
+        'tools': 'id name state command target cwd duration_ms',
+        'approvals': 'id request_id tool_call_id state command target reason cwd',
+        'subagents': 'id session_id state duration_ms',
+        'activity': 'id kind attempt',
+        'usage': 'context totals',
+        'context': 'tokens limit quality accounting',
+        'totals': 'scope partial input output reasoning cache_read cache_write cost_usd accounting',
+        'capabilities': 'files context approvals subagents compaction',
+        'overflow': 'files tools approvals subagents activity sessions observations',
+    }
+    objects = {'envelope': ('coucou_monitor',), 'coucou_monitor': ('usage', 'capabilities', 'overflow'),
+               'usage': ('context', 'totals')}
+    rows = ('files', 'tools', 'approvals', 'subagents', 'activity')
+    result = {}
+    for key in fields[group].split():
+        if key not in value:
+            continue
+        item = value[key]
+        if group == 'envelope' and key == 'tool_name':
+            if (value.get('hook_event_name') not in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure')
+                    or not isinstance(item, str) or not item
+                    or not all(c.isalnum() or c in '_.:-' for c in item)
+                    or len(item.encode('utf-8')) > 256):
+                continue
+        if group == 'approvals' and key == 'reason' and item not in ('permission_required', 'policy', 'unknown'):
+            continue
+        if group == 'activity' and key == 'kind' and item not in ('retry', 'rate_limit', 'compaction', 'error', 'session_reset'):
+            continue
+        if group == 'coucou_monitor' and key == 'outcome' and (value.get('status'), item) not in (
+                ('finished', 'completed'), ('failed', 'failed'), ('failed', 'incomplete'), ('interrupted', 'interrupted')):
+            continue
+        if key in objects.get(group, ()):
+            if isinstance(item, dict):
+                result[key] = private_fields(item, key)
+        elif group == 'coucou_monitor' and key in rows:
+            if isinstance(item, list):
+                result[key] = [private_fields(row, key) for row in item if isinstance(row, dict)]
+        elif group == 'coucou_monitor' and key in ('truncated_fields', 'active_session_ids'):
+            if isinstance(item, list) and all(isinstance(entry, str) for entry in item):
+                result[key] = item
+        elif not isinstance(item, (dict, list)):
+            result[key] = item
+    return result
+
 def normalize_event(name):
     mapping = {
         'BeforeTool': 'PreToolUse', 'BeforeToolSelection': 'PreToolUse',
@@ -2143,14 +2355,54 @@ def main():
             if '--statusline' not in sys.argv[1:]:
                 return
         else:
-            payload = json.loads(raw)
+            payload = json.loads(raw.decode('utf-8-sig'))
     except Exception:
-        if '--statusline' not in sys.argv[1:]:
-            return
+        return  # Malformed input must not escape through a previous statusline command.
 
     socket_path = os.path.expanduser(
         '~/Library/Containers/fr.louisraille.Coucou/Data/nb.sock'
     )
+
+    if not isinstance(payload, dict):
+        return
+    args = sys.argv[1:]
+    agent = ''
+    arg_event = ''
+    i = 0
+    while i < len(args):
+        if args[i] == '--agent' and i + 1 < len(args):
+            agent = args[i + 1]
+            i += 2
+        else:
+            if not arg_event:
+                arg_event = args[i]
+            i += 1
+    if agent in ('opencode', 'hermes') and payload.get('coucou_agent') not in ('opencode', 'hermes'):
+        payload['coucou_agent'] = agent
+    elif agent and '--ask' not in args and '--statusline' not in args:
+        payload.setdefault('coucou_agent', agent)
+    event = payload.get('hook_event_name', '') or arg_event
+    if (payload.get('coucou_agent') in ('opencode', 'hermes') or agent in ('opencode', 'hermes')
+            or event in ('AgentDisplayUpdate', 'AgentDisplayAlive') or 'coucou_monitor' in payload):
+        # Passive packets never inherit process context or enter legacy decision modes.
+        if event == 'PermissionRequest' or len(raw[:-1] if raw.endswith(b'\\n') else raw) > 65536:
+            return
+        payload['hook_event_name'] = event
+        payload = private_fields(payload)
+        if (payload.get('coucou_agent') not in ('opencode', 'hermes')
+                and event not in ('AgentDisplayUpdate', 'AgentDisplayAlive') and 'coucou_monitor' not in payload):
+            return  # Do not turn a malformed private packet into a loggable legacy one.
+        try:
+            wire = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()
+            if len(wire) > 65536:
+                return
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                s.connect(socket_path)
+                s.sendall(wire + b'\\n')
+        except Exception:
+            pass
+        return
 
     # --statusline mode: relay rate_limits to Coucou, then delegate to saved previous
     if '--statusline' in sys.argv[1:]:
@@ -2233,24 +2485,6 @@ def main():
         except Exception:
             pass
         return
-
-    # Parse --agent <name> and optional positional event from argv.
-    # --agent tags the payload with coucou_agent so the app routes to the right pill.
-    # The positional arg is a fallback event name for agents that do not set hook_event_name.
-    args = sys.argv[1:]
-    agent = ''
-    arg_event = ''
-    i = 0
-    while i < len(args):
-        if args[i] == '--agent' and i + 1 < len(args):
-            agent = args[i + 1]
-            i += 2
-        else:
-            if not arg_event:
-                arg_event = args[i]
-            i += 1
-    if agent:
-        payload.setdefault('coucou_agent', agent)
 
     env = os.environ
     payload.setdefault('term_program', env.get('TERM_PROGRAM', ''))

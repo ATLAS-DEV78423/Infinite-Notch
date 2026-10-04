@@ -95,6 +95,15 @@ export class Ticker {
     return this.startMs != null || this.queue.length > 0;
   }
 
+  /** A monitor is a current snapshot, never a queue/history of earlier details. */
+  snapshot(value: string) {
+    this.queue = [];
+    this.startMs = null;
+    this.displayIndex = -1;
+    setText(this.a, ""); setText(this.b, value); setText(this.c, "");
+    this.rest();
+  }
+
   sync(task: AgentTask | null) {
     const steps = task && task.steps.length > 0 ? task.steps : ["…"];
     const idx = task ? Math.min(task.stepIndex, steps.length - 1) : -1;

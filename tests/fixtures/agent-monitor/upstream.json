@@ -1,0 +1,69 @@
+{
+  "opencode": {
+    "version": "2.0.6",
+    "source_urls": [
+      "https://opencode.ai/v2/docs/build/plugins",
+      "https://opencode.ai/v2/docs/build/client",
+      "https://opencode.ai/v2/docs/api",
+      "https://opencode.ai/v2/docs/providers"
+    ],
+    "qualification": {
+      "status": "baseline-only",
+      "qualified_runtime_version": null,
+      "baseline_runtime_version": "2.0.6",
+      "installed_cli_version": "1.18.32",
+      "evidence_origin": "Controller's disposable 2.0.6 native host, matching public plugin package, authenticated loopback API and two synthetic locations with a scripted loopback-only model. Field structure only; actual staged Coucou baseline plugin and rebuilt Rust relay exercised. See docs/research/agent-inspector-verification.md.",
+      "observed": [
+        "Installed legacy 1.18.32 is unchanged; disposable opencode --version and actual API report 2.0.6.",
+        "Native events use data.sessionID and optional envelope location.directory; session.deleted and execution outcomes can omit location.",
+        "Prompt admission uses session.inbox.enqueued with a user item; shell completion creates a synthetic item.",
+        "Tool name is on session.tool.input.started; called/success/failed use session-scoped call IDs, not message-part status.",
+        "Observed explicit execution success/failure, permission.asked/replied identity, model-limit metadata and token bucket structure.",
+        "Actual Coucou baseline plugin delivered 12 exact canonical packets across two locations through the release relay; no approval packets or duplicate location observations. Matching-package strict typecheck passes."
+      ],
+      "limits": [
+        "Baseline-only qualification is not rich-monitor or release qualification. No legacy properties/message.part.updated fixtures are treated as V2 evidence.",
+        "Current-context/accounting, retry, compaction, move/reset, richer fields and ingress lifetime remain unqualified.",
+        "cases remains empty pending curated rich-mapper inputs/expectations; native baseline regression values are hand-authored in tests/opencode-privacy.test.mjs."
+      ]
+    },
+    "docs_derived": [
+      "Plugin.define with setup(ctx); setup may return cleanup.",
+      "ctx.location describes the plugin instance, not every accessible session or event.",
+      "ctx.event.subscribe accepts an AbortSignal; abort during cleanup."
+    ],
+    "cases": []
+  },
+  "hermes": {
+    "version": "v0.21.5+5360.g44a1ce9 (2026.9.24)",
+    "source_urls": [
+      "https://hermes-agent.nousresearch.com/docs/developer-guide/observer-hooks"
+    ],
+    "qualification": {
+      "status": "registration-dispatch-only",
+      "qualified_runtime_version": null,
+      "evidence_origin": "Controller's isolated version probe, direct real-host plugin doctor and real PluginManager dispatch through a rebuilt Rust relay, using task-supplied synthetic kwargs and disposable HOME/XDG. No real model-turn caller payload was captured.",
+      "observed": [
+        "hermes --version exited 0: Hermes Agent v0.21.5+5360.g44a1ce9 (2026.9.24)",
+        "Main used TemporaryDirectory, isolated HOME/HERMES_HOME/XDG, inherited only PATH, and set cwd to the temporary directory.",
+        "The probe reported Python 3.14.7 and OpenAI SDK not installed.",
+        "Direct real-host discovery/import/registration passed with 7 hooks and 0 tools after task-local dependency setup.",
+        "Five supplied synthetic hook paths passed exact minimized native relay delivery, unchanged inputs, no behavior-affecting return values and host unload."
+      ],
+      "limits": [
+        "The earlier isolated CLI doctor timed out; direct doctor/dispatch checks now pass, but no CLI/full-turn pass is claimed. No upstream hash was printed.",
+        "No supported rich-monitor runtime is claimed until isolated callback/tool/approval/usage/reset checks run.",
+        "The documented hooks do not guarantee session cwd or a model context-window limit."
+      ]
+    },
+    "docs_derived": [
+      "register(ctx) registers hooks; callbacks receive keyword arguments and should accept **kwargs.",
+      "Explicit session, turn, API-attempt and tool-call IDs are opaque; do not parse compound IDs.",
+      "on_session_end ends a turn/run; on_session_finalize and on_session_reset delimit session lifetime.",
+      "Approval hooks are observer-only; session_key is not guaranteed to identify a session_id or request.",
+      "pre_llm_call and pre_tool_call have behavior-affecting return conventions; Coucou must return None and leave inputs unchanged.",
+      "Even sanitized request/response/error bodies, child goals/summaries and environment/terminal metadata exceed Coucou's allowlist."
+    ],
+    "cases": []
+  }
+}

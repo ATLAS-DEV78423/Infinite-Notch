@@ -18,6 +18,14 @@ export class IslandStateMachine {
   greetHoverCollapseDelay = 10;
   /** An alert waiting for an answer stays open, even when the mouse leaves. */
   pinned = false;
+  interactionHold = false;
+  get held() { return this.pinned || this.interactionHold; }
+  setInteractionHold(held: boolean) {
+    if (held === this.interactionHold) return;
+    this.interactionHold = held;
+    if (held) this.clear("homeCollapse");
+    else if (this.state === "home") this.scheduleHomeCollapse();
+  }
 
   private petitHide: number | null = null;
   private homeCollapse: number | null = null;
@@ -114,10 +122,10 @@ export class IslandStateMachine {
 
   private scheduleHomeCollapse() {
     this.clear("homeCollapse");
-    if (this.pinned) return;
+    if (this.held) return;
     this.homeCollapse = window.setTimeout(() => {
       this.homeCollapse = null;
-      if (this.state === "home") this.transition("petit");
+      if (this.state === "home" && !this.held) this.transition("petit");
     }, this.homeToPetitDelay * 1000);
   }
 

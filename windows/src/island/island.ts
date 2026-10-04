@@ -83,6 +83,9 @@ export class Island {
   private confusedRecovery: number | null = null;
   private prevViewBeforeConfused: IslandViewName = "overview";
   private lastSyncedView: IslandViewName | null = null;
+  private inspectorHovered = false;
+  private reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  private lastGeometryView: IslandViewName = "overview";
 
   /** Drop sequence bookkeeping: last tick played, and whether the ✓ has fired. */
   private uploadTens = 0;
@@ -96,6 +99,7 @@ export class Island {
     this.engine.onDizzy = () => this.handleDizzy();
     this.greeting.onComplete = () => this.fsm.greetComplete();
     State.subscribe(() => {
+      this.syncInspectorHold();
       this.dirty = true;
       this.ensureRunning();
     });
@@ -112,6 +116,7 @@ export class Island {
         Sound.play("blip");
       },
       openTerminal: () => {
+        if (State.focusTask?.monitorOwned) return;
         const cwd = State.focusTask?.sessionCwd ?? null;
         void Bridge.openInVSCode(cwd);
       },
@@ -336,7 +341,7 @@ export class Island {
 
   /** An alert stopped waiting for an answer: let the island auto-close again. */
   dropPin() {
-    this.fsm.pinned = false;
+    this.fsm.pinned = State.isPinned;
   }
 
   // ── File drop ───────────────────────────────────────────────────────────────
@@ -457,7 +462,14 @@ export class Island {
 
   private animateGeometry(shrinking: boolean) {
     const { w, h, r } = this.targetSize();
-    if (shrinking) {
+    const inspectorTransition = State.view === "agentSession" || this.lastGeometryView === "agentSession";
+    this.lastGeometryView = State.view;
+    this.islandEl.classList.toggle("monitor-reduced-motion", State.view === "agentSession" && this.reducedMotion.matches);
+    if (inspectorTransition && this.reducedMotion.matches) {
+      this.width.jump(w); this.height.jump(h); this.radius.jump(r);
+      const p = botPosition(State.mode, State.view, h, State.uploadProgress);
+      this.botCx.set(p.cx); this.botCy.set(p.cy); this.botSize.set(p.diameter / 0.6);
+    } else if (shrinking) {
       this.width.curveTowards(w);
       this.height.curveTowards(h);
       this.radius.curveTowards(r);
@@ -525,6 +537,12 @@ export class Island {
   // ── Input ───────────────────────────────────────────────────────────────────
 
   private wireInput() {
+    const inspector = this.views.get("agentSession")!.el;
+    inspector.addEventListener("mouseenter", () => { this.inspectorHovered = true; this.syncInspectorHold(); });
+    inspector.addEventListener("mouseleave", () => { this.inspectorHovered = false; this.syncInspectorHold(); });
+    inspector.addEventListener("focusin", () => this.syncInspectorHold());
+    inspector.addEventListener("focusout", () => queueMicrotask(() => this.syncInspectorHold()));
+    this.reducedMotion.addEventListener("change", () => { if (State.view === "agentSession") this.animateGeometry(false); });
     // The wake strip is the only thing the OS can hit while the island is hidden.
     this.wakeStrip.addEventListener("mouseenter", () => {
       Sound.resume();
@@ -545,7 +563,10 @@ export class Island {
     });
 
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && State.mode === "expanded" && !State.isPinned) this.collapse();
+      if (e.key === "Escape" && State.mode === "expanded") {
+        if (State.view === "agentSession") { e.preventDefault(); this.setView("overview"); }
+        else if (!State.isPinned) this.collapse();
+      }
       State.lastActivity = performance.now();
     });
 
@@ -554,6 +575,13 @@ export class Island {
     // Outside Tauri (plain browser) drive the cursor from DOM events so the
     // island can be inspected with `npm run dev`.
     if (!IS_TAURI) this.followPageCursor();
+  }
+
+  private syncInspectorHold() {
+    const el = this.views.get("agentSession")?.el;
+    State.inspectorHold = State.mode === "expanded" && State.view === "agentSession" && !!el && (this.inspectorHovered || el.contains(document.activeElement));
+    this.fsm.pinned = State.isPinned;
+    this.fsm.setInteractionHold(State.inspectorHold);
   }
 
   /**
@@ -592,7 +620,7 @@ export class Island {
     }
     if (!inIsland && this.wasInIsland) {
       this.fsm.mouseLeft();
-      if (this.fsm.state === "home" && !State.isPinned) {
+      if (this.fsm.state === "home" && !this.fsm.held) {
         this.homeCollapseAt = performance.now() + State.settings.autoCloseInterval * 1000;
       }
     }
@@ -819,7 +847,7 @@ export class Island {
   }
 
   private updateCountdown(nowMs: number) {
-    if (State.mode !== "expanded" || State.isPinned || this.homeCollapseAt == null) {
+    if (State.mode !== "expanded" || this.fsm.held || this.homeCollapseAt == null) {
       this.countdown.style.width = "0px";
       return;
     }
@@ -844,17 +872,21 @@ export class Island {
     for (const [name, view] of this.views) {
       const on = name === State.view;
       view.el.classList.toggle("on", on);
+      view.el.inert = !on || !expanded;
       if (on) view.sync();
     }
 
-    // The chat is the only view with a text field, so it is the only time the
-    // island is allowed to take keyboard focus.
+    // Chat and the keyboard-accessible inspector can take window focus.
     if (this.lastSyncedView !== State.view) {
-      const wasChat = this.lastSyncedView === "prompt";
+      const wasChat = this.lastSyncedView === "prompt" || this.lastSyncedView === "agentSession";
       this.lastSyncedView = State.view;
-      if (State.view === "prompt") {
+      if (State.view === "prompt" || State.view === "agentSession") {
         void Bridge.focusWindow(true);
-        window.setTimeout(() => this.views.get("prompt")?.focus?.(), 120);
+        const view = State.view;
+        const generation = State.agentMonitor.generation;
+        window.setTimeout(() => {
+          if (State.view === view && State.mode === "expanded" && generation === State.agentMonitor.generation) this.views.get(view)?.focus?.();
+        }, 120);
       } else if (wasChat) {
         void Bridge.focusWindow(false);
       }

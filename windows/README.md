@@ -79,6 +79,19 @@ configure yourself.
 
 ## Build it yourself
 
+### Experimental local session inspector
+
+OpenCode/Hermes snapshot handling and the 640 × 280 **Details** view have synthetic
+web tests. Rich adapter mapping and native/runtime acceptance are not yet complete.
+Only required live-display metadata is used in memory; no analytics, activity
+logging, persistence or uploads. Approvals remain controlled by the agent.
+See [`../docs/research/agent-inspector-verification.md`](../docs/research/agent-inspector-verification.md).
+
+With existing npm dependencies installed, the synthetic preview/self-tests can run
+without Cargo: `./node_modules/.bin/vite --host 127.0.0.1`, then open
+`/tests/agent-session-ui.html`. It contains invented data only and does not
+connect to agent sessions. Native builds still require the toolchains below.
+
 You need [Rust](https://rustup.rs), [Node 20+](https://nodejs.org), and the
 **MSVC build tools** (Visual Studio Build Tools with "Desktop development with
 C++"). WebView2 ships with Windows 10/11.

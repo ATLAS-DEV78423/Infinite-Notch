@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Agent session inspector self-test</title>
+<style>body{background:#202127!important;overflow:auto!important}#results{position:absolute;top:380px;left:24px;white-space:pre-wrap;font:14px monospace}#controls{position:absolute;top:300px;left:40px;right:24px;display:flex;flex-wrap:wrap;gap:6px}</style>
+<div id="root"></div><div id="controls"></div><pre id="results">RED — loading production inspector…</pre>
+<script type="module">
+import '../src/style.css';
+const results = document.getElementById('results');
+try {
+  const { run } = await import('./agent-session-ui.ts');
+  await run(results);
+} catch (error) { results.textContent += '\nFAIL — ' + (error instanceof Error ? error.message : 'production inspector/self-tests unavailable'); }
+</script></html>
