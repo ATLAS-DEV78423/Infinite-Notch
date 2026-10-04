@@ -68,15 +68,6 @@ func usSqueezeX(_ t: Double) -> Double {
     return 1.0
 }
 
-func usProgressCurve(_ u: Double) -> Double {
-    if u < 0.40  { return 0.60 * usEOut(u/0.40) }
-    if u < 0.85  { return 0.60 + 0.32 * usEInOut((u-0.40)/0.45) }
-    return 0.92 + 0.08 * usEIn((u-0.85)/0.15)
-}
-func usProgressAt(_ t: Double, progStart: Double, progEnd: Double) -> Double {
-    t < progStart ? 0 : usProgressCurve(usSeg(t, progStart, progEnd))
-}
-
 // ============================================================
 // SPRING — port of reference spring(s, target, response, damping, dt)
 // ============================================================
@@ -139,6 +130,8 @@ struct USFrame {
     var check:       Double = 0
     var greenWash:   Double = 0
     var chooseAlpha: Double = 0
+    var isPreparing: Bool = false
+    var isFailed: Bool = false
     var uploadDuration: Double = 2.4
     var progEnd:    Double = USC.T_PROG_START + 2.4
     var growStart:  Double = USC.T_PROG_START + 2.4 + 0.25
@@ -154,13 +147,16 @@ final class UploadSequenceEngine {
     static let shared = UploadSequenceEngine()
 
     var uploadDuration: Double = 2.4
-    var progEnd:   Double { USC.T_PROG_START + uploadDuration }
+    var progEnd:   Double { completionTime ?? .infinity }
     var growStart: Double { progEnd + 0.25 }
     var growEnd:   Double { progEnd + 0.70 }
 
     private(set) var isActive: Bool = false
     private var entryWallTime: Double = 0   // Date().timeIntervalSinceReferenceDate at entry
     private var dropWallTime:  Double? = nil
+    private var preparationResult: Bool?
+    private var completionTime: Double?
+    private(set) var lastSimulationStepCount = 0
 
     private var sim = USSimState()
 
@@ -174,8 +170,8 @@ final class UploadSequenceEngine {
 
     // MARK: - Session lifecycle
 
-    func enterZone(x: CGFloat, y: CGFloat) {
-        let now = Date().timeIntervalSinceReferenceDate
+    func enterZone(x: CGFloat, y: CGFloat, at date: Date = Date()) {
+        let now = date.timeIntervalSinceReferenceDate
         cursorX = Double(x); cursorY = Double(y)
         prevCursorX = cursorX; prevCursorY = cursorY; prevCursorTime = now
         cursorSpeed = 0
@@ -186,6 +182,8 @@ final class UploadSequenceEngine {
         sim.by      = USSpring(v: USC.REST_Y)
         entryWallTime = now
         dropWallTime  = nil
+        preparationResult = nil
+        completionTime = nil
         isActive      = true
     }
 
@@ -201,16 +199,25 @@ final class UploadSequenceEngine {
     }
 
     func exitZone() {
-        // Keep engine active — island stays open per spec
+        if dropWallTime == nil { deactivate() }
     }
 
-    func performDrop(uploadDuration ud: Double) {
+    func performDrop(uploadDuration ud: Double, at date: Date = Date()) {
         uploadDuration = ud
-        let now = Date().timeIntervalSinceReferenceDate
+        let now = date.timeIntervalSinceReferenceDate
         dropWallTime = now
+        preparationResult = nil
+        completionTime = nil
         // Reset sim.t to T_DROP so the canonical post-drop timeline starts correctly,
         // regardless of how long the user hovered. Spring state (position/velocity) is preserved.
         sim.t = USC.T_DROP
+    }
+
+    func finishPreparation(success: Bool, at date: Date = Date()) {
+        guard isActive, dropWallTime != nil, preparationResult == nil else { return }
+        preparationResult = success
+        // A quick real copy still finishes the normal gulp/shrink before growing.
+        if success { completionTime = max(USC.T_PROG_START, tRef(at: date)) }
     }
 
     func deactivate() {
@@ -234,9 +241,12 @@ final class UploadSequenceEngine {
 
     // MARK: - Public entry point
 
-    func frame(at date: Date) -> USFrame {
+    func frame(at date: Date, reducedMotion: Bool = false) -> USFrame {
         guard isActive else { return USFrame() }
-        let t = tRef(at: date)
+        let t = reducedMotion
+            ? (dropWallTime == nil ? USC.T_DROP - USC.DT
+               : (preparationResult == true ? growEnd : USC.T_PROG_START))
+            : tRef(at: date)
         simulateTo(t)
         return computeFrame(t: t)
     }
@@ -244,10 +254,14 @@ final class UploadSequenceEngine {
     // MARK: - Simulation
 
     private func simulateTo(_ tTarget: Double) {
+        lastSimulationStepCount = 0
+        // Match the Tauri sequence: sleep/background stalls catch up at most two seconds.
+        if tTarget - sim.t > 2 { sim.t = tTarget - 2 }
         while sim.t < tTarget - 1e-10 {
             let dt = min(USC.DT, tTarget - sim.t)
             stepOnce(dt: dt)
             sim.t += dt
+            lastSimulationStepCount += 1
         }
     }
 
@@ -300,12 +314,15 @@ final class UploadSequenceEngine {
         f.progEnd   = progEnd
         f.growStart = growStart
         f.growEnd   = growEnd
+        f.isPreparing = dropWallTime != nil && preparationResult == nil
+        f.isFailed = preparationResult == false
 
         let entered    = sim.entered >= 0 ? sim.entered : 1e9
         let isDragging = (dropWallTime == nil)
         // For all phase-based calculations, clamp t to just before T_DROP while pre-drop
         // so long hovers don't accidentally trigger post-drop visuals.
         let pt = isDragging ? min(t, USC.T_DROP - USC.DT) : t
+        let completed = preparationResult == true && pt >= progEnd
 
         // Morph: 0→1 (entry), 1→0 (shrink to ball), 0→1 (grow back to box at choose)
         var morph: Double
@@ -328,7 +345,7 @@ final class UploadSequenceEngine {
             d = usLerp(USC.D_BOX, 14, k)
         }
         if pt >= USC.T_PROG_START {
-            let p = usProgressAt(pt, progStart: USC.T_PROG_START, progEnd: progEnd)
+            let p = completed ? 1.0 : 0.0
             x = usLerp(USC.BAR_X0, USC.BAR_X1, p); y = USC.BAR_Y; d = 14
         }
         if pt >= progEnd {
@@ -363,12 +380,6 @@ final class UploadSequenceEngine {
             let k = usSeg(pt, USC.T_CHEW_END, USC.T_SHRINK_END)
             sy = 1 + 0.12*sin(.pi*k); sx = 1 - 0.06*sin(.pi*k)
         }
-        if pt >= USC.T_PROG_START && pt < progEnd {
-            let v = (usProgressAt(pt+0.01, progStart: USC.T_PROG_START, progEnd: progEnd)
-                   - usProgressAt(pt,      progStart: USC.T_PROG_START, progEnd: progEnd)) / 0.01
-            let st = max(0, min(1, v*0.18))
-            sx = 1 + 0.25*st; sy = 1 - 0.15*st
-        }
         if pt >= growStart && pt < growEnd {
             sy = 1 + 0.06*sin(.pi * usSeg(pt, growStart, growEnd))
         }
@@ -396,17 +407,16 @@ final class UploadSequenceEngine {
         f.zoneOver   = sim.entered >= 0 && pt < USC.T_CHEW_END
         f.zoneAlpha  = 1 - usSeg(pt, USC.T_CHEW_END, USC.T_CHEW_END + 0.20)
         f.textAlpha  = f.zoneAlpha * ((x > USC.TEXT_X-40 && isDragging) ? 0.25 : 1.0)
-        f.barReveal  = usEOut(usSeg(pt, USC.T_BAR_IN, USC.T_BAR_IN+0.25))
-                     * (1 - usSeg(pt, growStart, growStart+0.20))
-        f.barAlpha   = usSeg(pt, USC.T_BAR_IN+0.05, USC.T_BAR_IN+0.25)
-                     * (1 - usSeg(pt, growStart, growStart+0.20))
-        f.progress   = usProgressAt(pt, progStart: USC.T_PROG_START, progEnd: progEnd)
-        f.flash      = pt >= progEnd ? sin(.pi * usSeg(pt, progEnd, progEnd+0.30)) : 0
-        f.check      = pt >= progEnd ? usEBack(usSeg(pt, progEnd, progEnd+0.25)) : 0
+        let barVisibility = completed ? 1 - usSeg(pt, growStart, growStart+0.20) : 1
+        f.barReveal  = usEOut(usSeg(pt, USC.T_BAR_IN, USC.T_BAR_IN+0.25)) * barVisibility
+        f.barAlpha   = usSeg(pt, USC.T_BAR_IN+0.05, USC.T_BAR_IN+0.25) * barVisibility
+        f.progress   = completed ? 1 : 0
+        f.flash      = completed ? sin(.pi * usSeg(pt, progEnd, progEnd+0.30)) : 0
+        f.check      = completed ? usEBack(usSeg(pt, progEnd, progEnd+0.25)) : 0
         let hoverGreen = f.zoneOver ? 0.22 : 0.0
         var uploadGreen = 0.0
-        if pt >= USC.T_PROG_START {
-            // Grows gradually from 0→0.50 as upload progresses (tied to f.progress)
+        if completed {
+            // Terminal wash is released by actual readiness, never guessed byte progress.
             let baseGreen = f.progress * 0.50
             // Brief flash burst at completion
             let flashExtra = pt >= progEnd ? 0.20 * sin(.pi * usSeg(pt, progEnd, progEnd + 0.40)) : 0
@@ -415,7 +425,7 @@ final class UploadSequenceEngine {
             uploadGreen = (baseGreen + flashExtra) * fadeOut
         }
         f.greenWash = max(hoverGreen, uploadGreen)
-        f.chooseAlpha = usSeg(pt, growStart+0.15, growEnd)
+        f.chooseAlpha = completed ? usSeg(pt, growStart+0.15, growEnd) : 0
 
         // Mouth rect in island coords (used by drawFile for clipping)
         let R  = d / 2 / 1.04

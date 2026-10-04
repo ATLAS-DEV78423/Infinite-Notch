@@ -5,6 +5,23 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private(set) var islandController: IslandWindowController?
+    private var fileShutdownPending = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !fileShutdownPending else { return .terminateLater }
+        fileShutdownPending = true
+        AppState.shared.prepareForFileShutdown()
+        Task { @MainActor in
+            await AppState.shared.filePreparer.shutdown()
+            let failed = await AppState.shared.filePreparer.cleanupFailed
+            if failed {
+                AppState.shared.fileDropMessage = "Temporary file cleanup could not finish safely. Try quitting again."
+                fileShutdownPending = false
+            } else { islandController?.cleanup() }
+            sender.reply(toApplicationShouldTerminate: !failed)
+        }
+        return .terminateLater
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Ignore SIGPIPE — prevents crash when nb-hook closes socket before we write response

@@ -6,10 +6,11 @@ import SwiftUI
 // so it never interferes with SwiftUI hit-testing.
 
 final class FileDropNSView: NSView {
-    var onDragEntered: ((CGPoint) -> Void)?
-    var onDragUpdated: ((CGPoint) -> Void)?
-    var onDragExited:  (() -> Void)?
-    var onFilesDropped: (([URL]) -> Void)?
+    var canAcceptDrag: (@MainActor () -> Bool)?
+    var onDragEntered: (@MainActor (CGPoint) -> Void)?
+    var onDragUpdated: (@MainActor (CGPoint) -> Void)?
+    var onDragExited:  (@MainActor () -> Void)?
+    var onFilesDropped: (@MainActor ([URL]) -> Bool)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -21,10 +22,12 @@ final class FileDropNSView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard canAcceptDrag?() == true else { return [] }
         onDragEntered?(sender.draggingLocation)
         return .copy
     }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard canAcceptDrag?() == true else { return [] }
         onDragUpdated?(sender.draggingLocation)
         return .copy
     }
@@ -35,8 +38,7 @@ final class FileDropNSView: NSView {
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
         ) as? [URL], !urls.isEmpty else { return false }
-        onFilesDropped?(urls)
-        return true
+        return onFilesDropped?(urls) ?? false
     }
 }
 
@@ -44,81 +46,27 @@ final class FileDropNSView: NSView {
 
 enum FileDropHandler {
     @MainActor
-    static func handle(urls: [URL], state: AppState) async {
-        guard let url = urls.first else { return }
-        let name = url.lastPathComponent
-
-        // Start animation immediately — do NOT block on file copy.
-        // Use original URL first; swap to inbox copy once background copy finishes.
-        state.droppedFile = DroppedFile(url: url, name: name)
-        state.uploadProgress = 0
-        state.fileDragOver = false
-        state.promptContext = .file(name: name, fileURL: url)
-
-        let dur = 2.4
-        UploadSequenceEngine.shared.performDrop(uploadDuration: dur)
-
-        // Copy to inbox in background — update state when done
-        let inbox = HookServer.supportDir.appendingPathComponent("inbox")
-        Task.detached {
-            try? FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
-            let dest = inbox.appendingPathComponent(name)
-            try? FileManager.default.removeItem(at: dest)
-            if (try? FileManager.default.copyItem(at: url, to: dest)) != nil {
-                await MainActor.run {
-                    state.droppedFile = DroppedFile(url: dest, name: name)
-                    state.promptContext = .file(name: name, fileURL: dest)
-                }
-            }
+    static func handle(source: URL, operationID: UUID, replacing old: UUID?, state: AppState) async {
+        if let old { await state.filePreparer.cancel(operationID: old) }
+        guard !Task.isCancelled, state.currentDropOperationID == operationID else {
+            await state.filePreparer.cancel(operationID: operationID)
+            return
         }
-
-        // Drop feedback
+        // Gulp is decorative feedback, not a claim of successful preparation.
         NotificationCenter.default.post(name: .botGulp, object: nil)
-        SoundEngine.shared.play("approve")
-        NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
         NotificationCenter.default.post(name: .botMorphTo, object: CGFloat(0))
-
-        state.uploadDuration = dur
-        state.uploadStartTime = Date()
-        state.view = .uploading  // canvas stays active: uploadActive covers .uploading
-
-        // Canvas timeline from drop:
-        //   T_DROP → T_PROG_START : ≈1.30s  gulp + shrink + bar reveal
-        //   T_PROG_START → progEnd: dur      progress bar fills
-        //   progEnd → growEnd     : 0.70s    Mochi grows back to choose position
-        let preProgress = USC.T_PROG_START - USC.T_DROP  // ≈1.30s
-
-        // Tick sounds — delayed to sync with canvas progress start
-        Task { @MainActor in
-            var lastTens = 0
-            let progStart = Date().addingTimeInterval(preProgress)
-            while lastTens < 9 {
-                try? await Task.sleep(nanoseconds: 80_000_000)
-                let approxP = min(1.0, max(0, Date().timeIntervalSince(progStart) / dur))
-                let tens = Int(approxP * 10)
-                if tens > lastTens {
-                    SoundEngine.shared.play("tick")
-                    lastTens = tens
-                }
+        do {
+            let file = try await state.filePreparer.prepare(source: source, operationID: operationID)
+            guard !Task.isCancelled, state.completeFilePreparation(file) else {
+                if state.currentDropOperationID == operationID { state.clearFilePreparation() }
+                await state.filePreparer.cancel(operationID: operationID)
+                return
             }
+            SoundEngine.shared.play("approve")
+            NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+        } catch {
+            guard !Task.isCancelled else { return }
+            _ = state.failFilePreparation(operationID: operationID, error: (error as? FilePreparationError) ?? .storage)
         }
-
-        // Wait for canvas progress to complete (gulp/shrink phase + upload duration)
-        try? await Task.sleep(nanoseconds: UInt64((preProgress + dur) * 1_000_000_000))
-
-        // Canvas shows checkmark at this point
-        SoundEngine.shared.play("approve")
-        NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
-
-        // Wait for grow-back animation + choose overlay settle
-        try? await Task.sleep(nanoseconds: UInt64(1_000_000_000))
-
-        // Clean up upload state
-        state.uploadProgress = 0
-        state.uploadStartTime = nil
-
-        // Switch to choose — canvas stays active (uploadActive covers .choose).
-        // Engine deactivates when user clicks a canvas choose button or navigates away.
-        state.view = .choose
     }
 }

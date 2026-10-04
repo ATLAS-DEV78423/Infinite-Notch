@@ -290,20 +290,12 @@ struct BotPlacement: View {
             // Normal: extra 40pt canvas at top for heart particles; position offset up by 20pt;
             // BotEngine compensates with cy = H/2 + particleOverhang/2 + oy*R + R*0.06.
             if isUploading {
-                TimelineView(.animation) { tl in
-                    let elapsed: Double = {
-                        guard let start = state.uploadStartTime else { return 0 }
-                        return tl.date.timeIntervalSince(start)
-                    }()
-                    let t = min(1.0, max(0, elapsed / state.uploadDuration))
-                    // cx = 36 + 526*t: bot center at fill right edge (bar left=36, width=526)
-                    let uploadCx = 36 + CGFloat(t * (2 - t)) * 526
-                    BotCanvasView(state: state, particleOverhang: 0)
-                        .frame(width: canvasSize, height: canvasSize)
-                        .opacity(state.isDraggingBot ? 0 : opacity)
-                        .position(x: uploadCx, y: cy)
-                }
-                .transition(.scale(scale: 0.01, anchor: .center).combined(with: .opacity))
+                // This fallback has no byte gauge: the dot moves only on actual readiness.
+                BotCanvasView(state: state, particleOverhang: 0)
+                    .frame(width: canvasSize, height: canvasSize)
+                    .opacity(state.isDraggingBot ? 0 : opacity)
+                    .position(x: cx, y: cy)
+                    .transition(.scale(scale: 0.01, anchor: .center).combined(with: .opacity))
             } else {
                 BotCanvasView(state: state, particleOverhang: overhang)
                     .frame(width: canvasSize, height: canvasSize + overhang)

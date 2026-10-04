@@ -17,6 +17,7 @@ final class IslandWindowController: NSWindowController {
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var viewSubscription: AnyCancellable?
     private var fileDragActive = false
+    private var filePreviewView: IslandView?
     private var activeMenus: Set<ObjectIdentifier> = []
     private var inputSuspended = false
     private var wasInactive = false
@@ -117,43 +118,57 @@ final class IslandWindowController: NSWindowController {
         // AppKit routes NSDraggingDestination events to registered views independently of hitTest.
         let dropView = FileDropNSView(frame: NSRect(origin: .zero, size: contentSize))
         dropView.autoresizingMask = [.width, .height]
+        dropView.canAcceptDrag = { [weak self] in
+            guard let self else { return false }
+            return !self.isCleanedUp && !self.inputSuspended && self.state.canAcceptFileDrop
+        }
         dropView.onDragEntered = { [weak self] loc in
-            Task { @MainActor in
-                guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return }
-                self.fileDragActive = true
-                self.updateDragHold()
-                let iLoc = self.windowToIsland(loc)
-                AppState.shared.fileDragOver = true
-                // enterZone sets isActive=true BEFORE hookExpand triggers re-render,
-                // so IslandContainer sees isActive=true when state.view becomes .upload.
-                UploadSequenceEngine.shared.enterZone(x: iLoc.x, y: iLoc.y)
-                NotificationCenter.default.post(name: .hookExpand, object: IslandView.upload)
-                NotificationCenter.default.post(name: .botMorphTo, object: CGFloat(1))
-            }
+            guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.canAcceptFileDrop else { return }
+            self.fileDragActive = true
+            self.updateDragHold()
+            // Existing ready context, prompt/chat, and Mail draft stay mounted during a preview.
+            // Only an accepted replacement may supersede them; no private display snapshot is copied.
+            guard self.state.canPreviewFileDrop else { return }
+            self.filePreviewView = self.state.view
+            let iLoc = self.windowToIsland(loc)
+            self.state.fileDragOver = true
+            UploadSequenceEngine.shared.enterZone(x: iLoc.x, y: iLoc.y)
+            self.expand(to: .upload)
+            NotificationCenter.default.post(name: .botMorphTo, object: CGFloat(1))
         }
         dropView.onDragUpdated = { [weak self] loc in
-            Task { @MainActor in
-                guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return }
-                let iLoc = self.windowToIsland(loc)
-                UploadSequenceEngine.shared.updateCursor(x: iLoc.x, y: iLoc.y)
-            }
+            guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.canAcceptFileDrop,
+                  self.state.fileDragOver else { return }
+            let iLoc = self.windowToIsland(loc)
+            UploadSequenceEngine.shared.updateCursor(x: iLoc.x, y: iLoc.y)
         }
         dropView.onDragExited = { [weak self] in
-            Task { @MainActor in
-                guard let self, !self.isCleanedUp else { return }
-                AppState.shared.fileDragOver = false
-                // Do NOT collapse — drag session still active; island stays open.
-                NotificationCenter.default.post(name: .botMorphTo, object: CGFloat(0))
+            guard let self, !self.isCleanedUp else { return }
+            if self.state.fileDragOver {
+                self.state.fileDragOver = false
                 UploadSequenceEngine.shared.exitZone()
+                if self.state.view == .upload, self.state.canAcceptFileDrop, let previous = self.filePreviewView {
+                    self.state.view = previous
+                }
+                NotificationCenter.default.post(name: .botMorphTo, object: CGFloat(0))
             }
+            self.filePreviewView = nil
         }
         dropView.onFilesDropped = { [weak self] urls in
-            Task { @MainActor in
-                guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return }
-                self.fileDragActive = false
-                self.updateDragHold()
-                await FileDropHandler.handle(urls: urls, state: AppState.shared)
+            guard let self, !self.isCleanedUp, !self.inputSuspended else { return false }
+            let accepted = self.state.prepareDroppedFiles(urls: urls)
+            if accepted { self.expand(to: .uploading) }
+            if !accepted, self.state.fileDragOver {
+                self.state.fileDragOver = false
+                UploadSequenceEngine.shared.exitZone()
+                if self.state.view == .upload, self.state.canAcceptFileDrop, let previous = self.filePreviewView {
+                    self.state.view = previous
+                }
             }
+            self.filePreviewView = nil
+            self.fileDragActive = false
+            self.updateDragHold()
+            return accepted
         }
 
         container.addSubview(hosting)    // z-bottom: SwiftUI + mouse events

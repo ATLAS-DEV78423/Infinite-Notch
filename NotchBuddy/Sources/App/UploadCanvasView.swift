@@ -7,13 +7,14 @@ import AppKit
 struct UploadCanvasView: View {
     @ObservedObject var state: AppState
     @State private var fileIcon: NSImage? = nil
+    @Environment(\.accessibilityReduceMotion) private var reducedMotion
 
     private var engine: UploadSequenceEngine { .shared }
 
     var body: some View {
-        TimelineView(.animation) { tl in
-            let f = engine.frame(at: tl.date)
-            let wallTime = tl.date.timeIntervalSinceReferenceDate
+        TimelineView(.animation(paused: reducedMotion || state.mode != .expanded || !state.isPresent)) { tl in
+            let f = engine.frame(at: tl.date, reducedMotion: reducedMotion)
+            let wallTime = reducedMotion ? 0 : tl.date.timeIntervalSinceReferenceDate
 
             ZStack(alignment: .topLeading) {
                 Canvas { ctx, _ in
@@ -22,14 +23,39 @@ struct UploadCanvasView: View {
                 .frame(width: 640, height: 176)
 
                 // Interactive choose buttons (invisible hit areas at reference positions)
-                if f.chooseAlpha > 0 {
+                if f.chooseAlpha > 0 && state.readyFile != nil {
                     chooseOverlay(f: f)
                         .frame(width: 640, height: 176)
+                }
+
+                if f.isPreparing && f.barAlpha > 0 {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel("Preparing file")
+                        .position(x: USC.BAR_X1, y: USC.BAR_Y - 30)
+                }
+                if state.filePreparation.isPreparing || state.filePreparation.disposition == .failed {
+                    Button(state.filePreparation.isPreparing ? "Cancel" : "Back") {
+                        state.clearFilePreparation()
+                        state.view = .upload
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(hex: "#D5D7DB"))
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(Color.white.opacity(0.09), in: Capsule())
+                    .accessibilityLabel("Cancel file preparation")
+                    .position(x: 567, y: 143)
+                }
+                if let message = state.fileDropMessage {
+                    Text(message).font(.system(size: 11)).foregroundColor(Color(hex: "#A9ADB5"))
+                        .frame(width: 570, alignment: .leading)
+                        .position(x: 320, y: 55)
                 }
             }
         }
         .onChange(of: state.droppedFile?.url) { _, url in
             if let url { loadIcon(url: url) }
+            else { fileIcon = nil }
         }
         .onAppear {
             if let url = state.droppedFile?.url { loadIcon(url: url) }
@@ -53,36 +79,36 @@ struct UploadCanvasView: View {
         ZStack(alignment: .topLeading) {
             // Primary: "Ask a question about it"
             Button {
+                guard state.readyFile != nil else { return }
+                engine.deactivate()
                 withAnimation(.easeInOut(duration: 0.22)) { state.view = .prompt }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                    UploadSequenceEngine.shared.deactivate()
-                }
             } label: {
                 Color.clear
                     .frame(width: 168, height: 26)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Ask a question about the prepared file")
             .frame(width: 168, height: 26)
             .position(x: 114 + 84, y: 113 + 13)   // center = (198, 126)
 
             // Secondary: "Send by email"
             Button {
+                guard state.readyFile != nil else { return }
+                engine.deactivate()
                 withAnimation(.easeInOut(duration: 0.22)) { state.view = .mail }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                    UploadSequenceEngine.shared.deactivate()
-                }
             } label: {
                 Color.clear
                     .frame(width: 120, height: 26)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Send the prepared file by email")
             .frame(width: 120, height: 26)
             .position(x: 290 + 60, y: 113 + 13)   // center = (350, 126)
         }
         .opacity(f.chooseAlpha)
-        .allowsHitTesting(f.chooseAlpha > 0.5)
+        .allowsHitTesting(f.chooseAlpha > 0.5 && state.readyFile != nil)
     }
 
     // MARK: - Main draw
@@ -143,7 +169,7 @@ struct UploadCanvasView: View {
         }
 
         // ── Choose view text ─────────────────────────────────────
-        if f.chooseAlpha > 0 {
+        if f.chooseAlpha > 0 && state.readyFile != nil {
             drawChooseView(ctx: &c, f: f)
         }
 
@@ -160,7 +186,7 @@ struct UploadCanvasView: View {
         var tCtx = ctx
         tCtx.opacity = f.textAlpha
 
-        let label = Text("Drop your files here")
+        let label = Text(state.fileDropMessage ?? "Drop one file here")
             .font(.system(size:13, weight:.medium))
             .foregroundColor(Color(hex:"#D5D7DB"))
         tCtx.draw(label, at: CGPoint(x: USC.TEXT_X, y: USC.TEXT_Y - 4), anchor: .leading)
@@ -188,13 +214,13 @@ struct UploadCanvasView: View {
         let barLen = (x1-x0) * f.barReveal
 
         // Filename label
-        let name = state.droppedFile?.name ?? "file"
-        let label = Text("Uploading \(name)")
+        let label = Text(f.isFailed ? (state.preparationErrorMessage ?? "File preparation failed.")
+                         : (state.readyFile != nil ? "Ready" : "Preparing file…"))
             .font(.system(size:12.5, weight:.medium))
             .foregroundColor(Color(hex:"#A9ADB5"))
         pCtx.draw(label, at: CGPoint(x: x0, y: by-30), anchor: .leading)
 
-        // Checkmark or percentage
+        // A checkmark is receipt-driven; pending work has a native indeterminate spinner.
         if f.check > 0 {
             var ckCtx = pCtx
             ckCtx.concatenate(CGAffineTransform(translationX: CGFloat(x1-8), y: CGFloat(by-30)))
@@ -205,11 +231,6 @@ struct UploadCanvasView: View {
             ck.move(to: CGPoint(x:-3.6,y:0.2)); ck.addLine(to: CGPoint(x:-1,y:2.8)); ck.addLine(to: CGPoint(x:3.8,y:-2.6))
             ckCtx.stroke(ck, with: .color(Color(red:0.027,green:0.075,blue:0.055)),
                          style: StrokeStyle(lineWidth:2, lineCap:.round, lineJoin:.round))
-        } else {
-            let pct = Text("\(Int(f.progress*100)) %")
-                .font(.system(size:12.5, weight:.medium).monospacedDigit())
-                .foregroundColor(Color(hex:"#A9ADB5"))
-            pCtx.draw(pct, at: CGPoint(x: x1, y: by-30), anchor: .trailing)
         }
 
         // Bar track
@@ -236,22 +257,6 @@ struct UploadCanvasView: View {
                                            endPoint:   CGPoint(x:fx,  y:0)))
         }
 
-        // Glow trail
-        if f.progress > 0.01 && f.progress < 1 {
-            let v = (usProgressAt(f.t+0.01, progStart:USC.T_PROG_START, progEnd:f.progEnd)
-                   - usProgressAt(f.t,      progStart:USC.T_PROG_START, progEnd:f.progEnd)) / 0.01
-            let tl = max(8, min(34, 8 + v*40))
-            let tGrad = Gradient(stops:[
-                .init(color: Color(red:0.204,green:0.831,blue:0.600,opacity:0), location:0),
-                .init(color: Color(red:0.431,green:0.906,blue:0.718,opacity:0.6), location:1)
-            ])
-            var glowCtx = pCtx
-            glowCtx.addFilter(.blur(radius:3))
-            glowCtx.fill(roundedRect(CGRect(x:fx-tl, y:by-4, width:tl, height:8), r:4),
-                         with: .linearGradient(tGrad,
-                                              startPoint:CGPoint(x:fx-tl,y:0),
-                                              endPoint:  CGPoint(x:fx,y:0)))
-        }
     }
 
     // MARK: - Choose view text + buttons (canvas layer)

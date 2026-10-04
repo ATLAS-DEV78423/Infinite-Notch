@@ -8,8 +8,12 @@ final class AppState: ObservableObject {
     static let shared = AppState()
 
     // Island state
-    @Published var mode: IslandMode = .hidden
-    @Published var view: IslandView = .overview
+    @Published var mode: IslandMode = .hidden {
+        didSet { if mode != .expanded { cancelPreparingFile() } }
+    }
+    @Published var view: IslandView = .overview {
+        didSet { if view != .uploading { cancelPreparingFile() } }
+    }
 
     // Tasks
     @Published var tasks: [AgentTask] = []
@@ -34,7 +38,12 @@ final class AppState: ObservableObject {
     var lastMouseMove: Date = .now
     var lastActivity: Date = .now
     var isPresent: Bool = true {
-        didSet { if !isPresent { islandFSM?.cancelTimers() } }
+        didSet {
+            if !isPresent {
+                clearFilePreparation()
+                islandFSM?.cancelTimers()
+            }
+        }
     }
 
     // Compatibility input for HookServer's pins; the FSM owns the one hold set.
@@ -46,12 +55,14 @@ final class AppState: ObservableObject {
     @Published var homeCollapseAt: TimeInterval?
     @Published var homeCollapseDuration: TimeInterval = 0
 
-    // Upload progress (0-1) — set to 1.0 only at completion; animation is time-based
-    @Published var uploadProgress: Double = 0
-
-    // Upload animation timing (non-published — TimelineViews read these directly)
-    var uploadStartTime: Date?
-    var uploadDuration: Double = 2.4
+    // Legacy geometry consumers read only actual readiness, never elapsed copy time.
+    @Published private(set) var uploadProgress: Double = 0
+    @Published private(set) var filePreparation = CurrentDropPreparation()
+    @Published private(set) var preparationErrorMessage: String?
+    @Published var fileDropMessage: String?
+    let filePreparer = FilePreparation()
+    private var preparationTask: Task<Void, Never>?
+    private var preparationSleepObservers: [NSObjectProtocol] = []
 
     // File drag-over state (mailbox morph glow + mouth spring)
     @Published var fileDragOver: Bool = false
@@ -200,8 +211,8 @@ final class AppState: ObservableObject {
     // Context for prompt (window attach / file)
     @Published var promptContext: PromptContext? = nil
 
-    // Dropped file (set during upload flow)
-    @Published var droppedFile: DroppedFile? = nil
+    // Populated only from the current native ready receipt.
+    @Published private(set) var droppedFile: DroppedFile? = nil
 
     // Short note message (shown in NoteView)
     @Published var noteMessage: String? = nil
@@ -397,6 +408,111 @@ final class AppState: ObservableObject {
 
         // Always load integration pills
         loadIntegrationTasks()
+
+        // Invalidate the UI owner synchronously on the main notification queue.
+        // Native cancellation may queue, but a stale receipt already has no UI authority.
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            preparationSleepObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.clearFilePreparation() }
+            })
+        }
+    }
+
+    // MARK: - Operation-owned local file preparation
+
+    var readyFile: PreparedFile? { filePreparation.readyFile }
+    var currentDropOperationID: UUID? { filePreparation.operationID }
+    var canAcceptFileDrop: Bool { isPresent && pendingApproval == nil && pendingQuestion == nil }
+    var canPreviewFileDrop: Bool {
+        canAcceptFileDrop && currentDropOperationID == nil && promptContext == nil && view != .prompt && view != .mail
+    }
+    var canUsePromptFile: Bool {
+        if case .file(_, let url) = promptContext { return readyFile != nil && readyFile?.url == url }
+        return true
+    }
+
+    @discardableResult
+    func prepareDroppedFiles(urls: [URL]) -> Bool {
+        guard canAcceptFileDrop else {
+            fileDropMessage = "Finish the pending approval or question before dropping a file."
+            return false
+        }
+        guard urls.count == 1, let source = urls.first, source.isFileURL else {
+            fileDropMessage = "Choose one file. Multiple items and text drops are not supported yet."
+            return false
+        }
+        let previewActive = fileDragOver && UploadSequenceEngine.shared.isActive
+        // Cancelling the old task revokes its native worker before clearing/replacing UI ownership.
+        preparationTask?.cancel()
+        let id = UUID()
+        let old = filePreparation.begin(operationID: id)
+        droppedFile = nil
+        promptContext = nil
+        preparationErrorMessage = nil
+        fileDropMessage = nil
+        uploadProgress = 0
+        fileDragOver = false
+        if !previewActive { UploadSequenceEngine.shared.enterZone(x: 140, y: 90) }
+        UploadSequenceEngine.shared.performDrop(uploadDuration: 2.4)
+        view = .uploading
+        preparationTask = Task { [weak self] in
+            guard let self else { return }
+            await FileDropHandler.handle(source: source, operationID: id, replacing: old, state: self)
+        }
+        return true
+    }
+
+    func completeFilePreparation(_ file: PreparedFile) -> Bool {
+        guard canAcceptFileDrop, view == .uploading, filePreparation.complete(file) else { return false }
+        droppedFile = DroppedFile(url: file.url, name: file.name)
+        promptContext = .file(name: file.name, fileURL: file.url)
+        uploadProgress = 1
+        preparationTask = nil
+        UploadSequenceEngine.shared.finishPreparation(success: true)
+        view = .choose
+        return true
+    }
+
+    func failFilePreparation(operationID: UUID, error: FilePreparationError) -> Bool {
+        guard filePreparation.fail(operationID: operationID) else { return false }
+        droppedFile = nil
+        promptContext = nil
+        uploadProgress = 0
+        preparationErrorMessage = error.message
+        preparationTask = nil
+        UploadSequenceEngine.shared.finishPreparation(success: false)
+        return true
+    }
+
+    func cancelPreparingFile() {
+        if filePreparation.isPreparing { clearFilePreparation() }
+    }
+
+    func clearFilePreparation() {
+        preparationTask?.cancel()
+        preparationTask = nil
+        let cancelled = filePreparation.clear()
+        droppedFile = nil
+        if case .file = promptContext { promptContext = nil }
+        preparationErrorMessage = nil
+        fileDropMessage = nil
+        uploadProgress = 0
+        fileDragOver = false
+        UploadSequenceEngine.shared.deactivate()
+        if view == .uploading || view == .choose { view = .upload }
+        if let cancelled {
+            let nativeOwner = filePreparer
+            Task { await nativeOwner.cancel(operationID: cancelled) }
+        }
+        // Accepted ready copies remain owned natively until shutdown, including after UI clear.
+    }
+
+    func prepareForFileShutdown() {
+        clearFilePreparation()
+        let center = NSWorkspace.shared.notificationCenter
+        for token in preparationSleepObservers { center.removeObserver(token) }
+        preparationSleepObservers.removeAll()
     }
 
     // MARK: - Computed
