@@ -11,9 +11,12 @@
 **Spec:** [approved expansion design](../specs/2026-10-04-notch-app-expansion-design.md), sections 3–5, 10–14. This is the first executable subsystem plan; [the release roadmap](../../NOTCH_ROADMAP.md) tracks the remaining work, including the existing inspector.
 
 **Execution status:** Approved by the user on 2026-10-04. Tauri/Rust Tasks 1/3/5
-have scoped implementations and portable/Linux verification; native acceptance
-and Swift Tasks 2/4 remain pending. Task 6's runner/receipt is implemented, not
-proof of native completion. See [the current receipt](../../research/notch-foundation-verification.md).
+have scoped implementations and portable/Linux verification. Mac Task 2's 21
+Swift checks and three unsigned builds passed at `4e9468a`; Task 4 is at its native
+RED gate. Full native interaction remains pending. Task 6's runner/receipt is
+implemented, not proof of native completion. See
+[the current receipt](../../research/notch-foundation-verification.md) and
+[exact native results](../../research/native-qualification.md).
 
 ## Global Constraints
 

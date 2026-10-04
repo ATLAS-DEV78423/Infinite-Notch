@@ -65,7 +65,10 @@ active leases and restart cleanup were tested with synthetic files.
 partial; it is preserved rather than guessed. Same-UID hostile inode/name races,
 network filesystems and power-loss durability are not comprehensively certified.
 Windows restart reaping is explicitly unsupported/unimplemented, not inferred
-from Linux. Windows handle code is authored but remains uncompiled/unexecuted.
+from Linux. At the original `d537404` checkpoint Windows handle code had not been
+compiled/executed. The [native receipt](native-qualification.md) now records
+real Windows publication/collision coverage at `4e9468a` (10/11 standalone,
+remaining fixture defect); later build gates were still skipped at that revision.
 Ready native copies stay owned until explicit disposal/exit; UI clearing must not
 guess they are unleased. Export/transfer leases and full eviction belong to shelf
 work. Cooperative cancellation cannot interrupt an indefinitely blocked kernel
@@ -142,8 +145,11 @@ synthetic profiles and a temporary local server which was stopped afterwards.
 
 ## Still required
 
-Swift foundation Tasks 2/4 need an actual compiler/Xcode lane; no untested parity
-implementation is claimed. Windows native compilation, reparse/rename/delete,
+The hosted native lane now exists. Mac Task 2 passed 21 focused Swift cases and
+all three unsigned Xcode builds at `4e9468a`; Task 4 preparation is at its real
+test-first gate. See [exact revision/run results](native-qualification.md), not
+the historical local tool commands above (their task-local directories may no
+longer exist). Windows full-build qualification, broad reparse coverage,
 restart cleanup, OLE drag/attachments, real disk-full/permission-loss, focus,
 pause/quit/sleep, sandbox, VoiceOver/Narrator and hardware frame/idle/input targets
 remain pending. Full native archive packaging is not proved by separate tests.

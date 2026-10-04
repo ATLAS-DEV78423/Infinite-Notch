@@ -169,6 +169,42 @@ The new runner does not yet compile a future actor; native behavioral RED must
 be observed before product copying/readiness changes. Owned-copy, real input,
 sandbox and hardware acceptance remain pending.
 
+### Full Windows/Linux build lane: `0331a4f`
+
+Exact source `0331a4f27f276c13208bc8bd26fa0c64cc287868`.
+[Tauri run 37230164506](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37230164506)
+completed **success**; both jobs actually ran to completion, without rerunning an
+uncertain dispatch. Windows job 111517976258 passed **12** standalone copy cases,
+**26** app-library and **10** relay tests, its 81 TypeScript checks, actual
+release-relay build and full no-bundle Tauri/TypeScript/Vite build. The finished
+writer was closed in the fixture; its new held-writer denial test passed without
+relaxing production source sharing. Native success/collision publication is now
+verified within these fixtures. Actual image: `win22` / `20260927.320.1`, X64,
+Rust/Cargo 1.98.1. Standalone unused reaper types/functions and app unused reaper
+result fields remain warnings; Windows restart cleanup is still unsupported.
+
+Linux job 111517976423 also passed its full lane. Server 2022 builds are not
+Windows 10/11 desktop, Explorer/OLE, screen-reader, crash/reparse or signing proof.
+
+[Mac run 37230164507](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37230164507),
+job 111517976401, passed all three unsigned builds, prior five checks and 21 hover
+cases, then the new readiness assertion compiled and **failed behaviorally**:
+`check=1.0, chooseAlpha=1.0, progress=1.0` after ten seconds without an I/O result
+(exit 133). This is the intended Task 4 RED, not a failed compiler surrogate.
+
+The subsequent reviewed Task 4 candidate contains an owned Swift actor/Darwin
+worker, exclusive descriptor-anchored copies, bounded cancellation/admission,
+current-UUID ready-only context/actions and receipt-driven Mochi completion.
+It removes destructive inbox replacement, original-path ready context, timed
+progress/ticks and orphaned copy work. Twenty actual actor/owner/frame cases
+are wired into the existing real native runner; their GREEN and the changed
+app builds remain pending. A source review/local Node pass cannot certify them.
+
+Controlled shutdown awaits native workers; ready copies are retained across UI
+clearing. Mac abnormal-exit reaping and export/consumer exit leases are **not**
+implemented or qualified by this candidate. Sandbox grants, real input, slow
+disk/cancel/permission loss and hardware/accessibility remain required.
+
 ## Still not qualified
 
 Mac full-hover/delay/independent holds and owned asynchronous/truthful preparation;
