@@ -18,3 +18,15 @@ DerivedData/
 # Local only (never published)
 .claude/
 _prive/
+
+# Private workspace state, never part of source checkpoints
+.omnirush/
+.superpowers/
+.opencode/omnirush/
+.env
+.env.*
+!.env.example
+
+# Python qualification/test caches
+__pycache__/
+*.py[cod]
