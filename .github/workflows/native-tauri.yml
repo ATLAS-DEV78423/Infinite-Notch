@@ -1,0 +1,214 @@
+name: Native Tauri qualification
+
+on:
+  push:
+    branches: [feat/notch-expansion]
+    paths:
+      - 'windows/**'
+      - 'integrations/**'
+      - 'tests/**'
+      - 'scripts/test-*.sh'
+      - 'NotchBuddy/Sources/App/HookServer.swift'
+      - '.github/workflows/native-tauri.yml'
+      - '.github/workflows/linux.yml'
+  pull_request:
+    paths:
+      - 'windows/**'
+      - 'integrations/**'
+      - 'tests/**'
+      - 'scripts/test-*.sh'
+      - 'NotchBuddy/Sources/App/HookServer.swift'
+      - '.github/workflows/native-tauri.yml'
+      - '.github/workflows/linux.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-tauri-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    # Server 2022 compilation/tests do not qualify desktop OLE/Explorer/Defender.
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Record checkout and tools
+        run: |
+          sha=$(git rev-parse HEAD)
+          {
+            echo '## Windows Server build-only qualification'
+            printf 'Checkout: %s\n' "$sha"
+            printf 'Runner: %s %s; image %s %s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$ImageOS" "$ImageVersion"
+            node --version
+            npm --version
+            rustc --version
+            cargo --version
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Install locked npm dependencies
+        id: dependencies
+        working-directory: windows
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript regressions
+        id: node_tests
+        run: node --test tests/*.test.ts
+
+      - name: Windows-native standalone copy tests
+        id: copy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP ("coucou-copy-" + [guid]::NewGuid().ToString('N'))
+          $owned = New-Item -ItemType Directory -Path $fixture
+          $executable = Join-Path $owned.FullName 'file-copy-tests.exe'
+          try {
+            $env:COUCOU_COPY_TEST_ROOT = $owned.FullName
+            rustc --edition=2021 --test tests/file-copy-rust.rs -o $executable
+            if ($LASTEXITCODE -ne 0) { throw "rustc failed with exit code $LASTEXITCODE" }
+            & $executable --test-threads=4
+            if ($LASTEXITCODE -ne 0) { throw "copy tests failed with exit code $LASTEXITCODE" }
+          } finally {
+            Remove-Item Env:COUCOU_COPY_TEST_ROOT -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $owned.FullName -Recurse -Force
+          }
+
+      - name: Build real release relay
+        id: relay
+        working-directory: windows
+        run: cargo build --release -p coucou-hook --locked
+
+      - name: Cargo workspace tests
+        id: workspace
+        working-directory: windows
+        run: cargo test --workspace --locked
+
+      - name: Full Tauri build without bundling
+        id: tauri
+        working-directory: windows
+        run: npm run tauri -- build --no-bundle -- --locked
+
+      - name: Record step results
+        if: ${{ always() }}
+        run: |
+          {
+            echo '### Step results'
+            echo 'Locked npm dependencies: ${{ steps.dependencies.outcome }}'
+            echo 'TypeScript regressions: ${{ steps.node_tests.outcome }}'
+            echo 'Windows-native standalone copy tests: ${{ steps.copy.outcome }}'
+            echo 'Release relay build: ${{ steps.relay.outcome }}'
+            echo 'Cargo workspace tests: ${{ steps.workspace.outcome }}'
+            echo 'Full Tauri / TypeScript / Vite build: ${{ steps.tauri.outcome }}'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Record checkout and tools
+        run: |
+          sha=$(git rev-parse HEAD)
+          {
+            echo '## Linux build-only qualification'
+            printf 'Checkout: %s\n' "$sha"
+            printf 'Runner: %s %s; image %s %s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$ImageOS" "$ImageVersion"
+            node --version
+            npm --version
+            python3 --version
+            rustc --version
+            cargo --version
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Install existing Linux prerequisites
+        id: prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libdbus-1-dev patchelf \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+
+      - name: Install locked npm dependencies
+        id: dependencies
+        working-directory: windows
+        run: npm ci --no-audit --no-fund
+
+      # Existing MJS/Python process fixtures require POSIX shebangs/signals and
+      # Unix sockets. Run them unchanged here, not as Windows-native evidence.
+      - name: Node TypeScript and MJS regressions
+        id: node_tests
+        run: |
+          mkdir -p /tmp/opencode
+          node --test tests/*.test.ts tests/*.test.mjs
+
+      - name: Real adapter and relay regressions
+        id: adapters
+        run: bash scripts/test-agent-adapters.sh
+
+      - name: Python agent relay regressions
+        id: python_relay
+        run: python3 -B -m unittest discover -s tests -p test_agent_relay.py
+
+      - name: Linux-native standalone copy tests
+        id: copy
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/test-file-copy.sh
+
+      - name: Build real release relay
+        id: relay
+        working-directory: windows
+        run: cargo build --release -p coucou-hook --locked
+
+      - name: Cargo workspace tests
+        id: workspace
+        working-directory: windows
+        run: cargo test --workspace --locked
+
+      - name: Full Tauri build without bundling
+        id: tauri
+        working-directory: windows
+        run: npm run tauri -- build --no-bundle --config src-tauri/tauri.linux.conf.json -- --locked
+
+      - name: Record step results
+        if: ${{ always() }}
+        run: |
+          {
+            echo '### Step results'
+            echo 'Linux prerequisites: ${{ steps.prerequisites.outcome }}'
+            echo 'Locked npm dependencies: ${{ steps.dependencies.outcome }}'
+            echo 'Node TypeScript and MJS regressions: ${{ steps.node_tests.outcome }}'
+            echo 'Adapter and relay regressions: ${{ steps.adapters.outcome }}'
+            echo 'Python agent relay regressions: ${{ steps.python_relay.outcome }}'
+            echo 'Linux-native standalone copy tests: ${{ steps.copy.outcome }}'
+            echo 'Release relay build: ${{ steps.relay.outcome }}'
+            echo 'Cargo workspace tests: ${{ steps.workspace.outcome }}'
+            echo 'Full Tauri / TypeScript / Vite build: ${{ steps.tauri.outcome }}'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,146 @@
+name: Native macOS qualification
+
+on:
+  push:
+    branches: [feat/notch-expansion]
+    paths:
+      - 'NotchBuddy/**'
+      - 'scripts/test-screen-geometry.sh'
+      - 'scripts/test-safe-links.sh'
+      - 'scripts/test-chat-parsing.sh'
+      - 'scripts/test-plan-gauge.sh'
+      - 'scripts/test-ask-question.sh'
+      - 'tests/**'
+      - '.github/workflows/native-macos.yml'
+  pull_request:
+    paths:
+      - 'NotchBuddy/**'
+      - 'scripts/test-screen-geometry.sh'
+      - 'scripts/test-safe-links.sh'
+      - 'scripts/test-chat-parsing.sh'
+      - 'scripts/test-plan-gauge.sh'
+      - 'scripts/test-ask-question.sh'
+      - 'tests/**'
+      - '.github/workflows/native-macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  qualification:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record checkout and default toolchain
+        run: |
+          {
+            echo '## Checkout and default macOS toolchain'
+            printf 'Checkout SHA: `%s`\n\n' "$(git rev-parse HEAD)"
+            printf 'Runner: `%s/%s`; macOS `%s` (build `%s`); machine `%s`\n\n' \
+              "$RUNNER_OS" "$RUNNER_ARCH" "$(sw_vers -productVersion)" \
+              "$(sw_vers -buildVersion)" "$(uname -m)"
+            printf 'Runner image: `%s` / `%s`\n\n' "$ImageOS" "$ImageVersion"
+            echo '```text'
+            xcodebuild -version
+            swift --version
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Install and record XcodeGen
+        run: |
+          brew install xcodegen
+          {
+            echo '## XcodeGen'
+            echo '```text'
+            xcodegen --version
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate project
+        working-directory: NotchBuddy
+        run: xcodegen
+
+      - name: Test screen geometry
+        id: geometry
+        run: bash scripts/test-screen-geometry.sh
+
+      - name: Test safe links
+        id: safe_links
+        run: bash scripts/test-safe-links.sh
+
+      - name: Test chat parsing
+        id: chat_parsing
+        run: bash scripts/test-chat-parsing.sh
+
+      - name: Test plan gauge
+        id: plan_gauge
+        run: bash scripts/test-plan-gauge.sh
+
+      - name: Test ask question
+        id: ask_question
+        run: bash scripts/test-ask-question.sh
+
+      - name: Build NotchBuddy Debug (unsigned)
+        id: debug_direct
+        run: |
+          xcodebuild \
+            -project NotchBuddy/NotchBuddy.xcodeproj \
+            -scheme NotchBuddy \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/native-macos/notchbuddy-debug" \
+            build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+      - name: Build CoucouAppStore Debug (unsigned)
+        id: debug_appstore
+        run: |
+          xcodebuild \
+            -project NotchBuddy/NotchBuddy.xcodeproj \
+            -scheme CoucouAppStore \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/native-macos/appstore-debug" \
+            build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+      - name: Build NotchBuddy Release (unsigned)
+        id: release_direct
+        run: |
+          xcodebuild \
+            -project NotchBuddy/NotchBuddy.xcodeproj \
+            -scheme NotchBuddy \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/native-macos/notchbuddy-release" \
+            build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+      - name: Summarize limited qualification results
+        if: ${{ always() }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## Build-only qualification results
+
+          | Check | Outcome |
+          | --- | --- |
+          | Screen geometry | ${{ steps.geometry.outcome }} |
+          | Safe links | ${{ steps.safe_links.outcome }} |
+          | Chat parsing | ${{ steps.chat_parsing.outcome }} |
+          | Plan gauge | ${{ steps.plan_gauge.outcome }} |
+          | Ask question | ${{ steps.ask_question.outcome }} |
+          | NotchBuddy Debug (unsigned) | ${{ steps.debug_direct.outcome }} |
+          | CoucouAppStore Debug (unsigned) | ${{ steps.debug_appstore.outcome }} |
+          | NotchBuddy Release (unsigned) | ${{ steps.release_direct.outcome }} |
+
+          Results apply only to the checkout SHA and actual default toolchain recorded above.
+          These checks do not qualify signing, notarization, app launch, native UI/hardware,
+          or runtime sandbox/accessibility permissions. No build products are uploaded.
+          SUMMARY

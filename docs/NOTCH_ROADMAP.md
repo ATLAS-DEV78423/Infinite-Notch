@@ -11,6 +11,8 @@ derivative with restricted upstream assets without permission.
 - [Approved full design and 52-feature coverage ledger](superpowers/specs/2026-10-04-notch-app-expansion-design.md)
 - [Checkout/API inventory](research/notch-app-readiness.md)
 - [First executable foundation plan](superpowers/plans/2026-10-04-notch-foundation.md)
+- [Full release execution map and feature routing](RELEASE_READINESS.md)
+- [Approved next native qualification plan](superpowers/plans/2026-10-04-native-qualification.md)
 - [Existing agent-inspector plan](superpowers/plans/2026-10-03-agent-session-inspector.md)
 - [Agent verified/pending receipt](research/agent-inspector-verification.md)
 - [Build, verification, privacy and contribution guide](DEVELOPMENT.md)
