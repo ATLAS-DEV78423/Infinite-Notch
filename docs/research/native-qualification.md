@@ -97,6 +97,48 @@ RED/GREEN outcomes were subsequently observed without duplicate dispatch:
   required before calling that candidate verified.
 - Linux completed its full test/build lane successfully for `516bd3c` as well.
 
+### First Windows candidate: `57f2d2a`
+
+[Run 37223046065](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37223046065)
+tested `57f2d2a301985c64e05ddeb411761afbeaaa602e`. Linux again passed its full lane.
+Windows still failed 5/11 tests at publication; the native probe changed from
+error 87 to **32 / sharing violation**. The full-path Win32 descriptor candidate
+was therefore **not a verified repair**; Windows workspace/full-build remain
+unexecuted. Retain this failure rather than silently replacing its receipt.
+
+The next candidate uses the documented user-mode `NtSetInformationFile` native
+same-directory/simple-name form. It avoids Win32 DOS/current-directory target
+resolution and target-parent reopening while preserving all pinned handles,
+no-follow/sharing restrictions and no-overwrite publication. It validates the
+simple target name and translates only native status codes into controlled
+errors; no new dependency, driver, global hook, current-directory change or
+relaxed pin is introduced. Actual native GREEN is still required.
+
+Primary API contracts:
+[NtSetInformationFile](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetinformationfile)
+(explicitly documents user-mode naming) and
+[FILE_RENAME_INFORMATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information)
+(same-directory names and target-directory sharing constraints).
+
+### Mac hover candidate after actual RED
+
+The scoped foundation Task 2 implementation now contains 21 deterministic pure
+FSM cases: default/delayed full hover, exact leave/reentry boundaries, explicit
+auto-close, independent owners, queued stale callbacks, greeting/hide holds,
+external synchronization, preference clamping and actual countdown deadlines.
+Native controller inputs/settings/ownership are wired without a new framework;
+keyboard, drag, menu, approval and future inspector owners remain separate.
+
+Central review corrected countdown scheduling: its TimelineView is constructed
+only while expanded with a real deadline, at 4 Hz; hidden/held/deadline-free paths
+do not keep that timeline ticking. Other app-wide hidden rendering/performance
+still requires native measurement, not an inference from this code path.
+
+Local compiler execution is unavailable. Source/available shell checks are not
+Swift GREEN; the new source must pass the real Swift runner and all app builds
+before its native build/test gate is recorded complete. Native input/focus,
+accessibility, screen changes and hardware interaction remain unqualified.
+
 ## Still not qualified
 
 Mac full-hover/delay/independent holds and owned asynchronous/truthful preparation;

@@ -496,6 +496,15 @@ mod native {
     // replacement. Source handles also exclude FILE_SHARE_WRITE.
     pub struct Dir { file: File, path: PathBuf, _parents: Vec<File> }
     pub struct CleanupMarker;
+    #[repr(C)]
+    union IoStatus { status: i32, _pointer: *mut std::ffi::c_void }
+    #[repr(C)]
+    struct IoStatusBlock { status: IoStatus, information: usize }
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtSetInformationFile(handle: *mut std::ffi::c_void, io_status: *mut IoStatusBlock, info: *mut std::ffi::c_void, size: u32, class: i32) -> i32;
+        fn RtlNtStatusToDosError(status: i32) -> u32;
+    }
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn SetFileInformationByHandle(handle: *mut std::ffi::c_void, class: u32, info: *const std::ffi::c_void, size: u32) -> i32;
@@ -560,21 +569,29 @@ mod native {
     }
     pub fn verify_location(_: &Path, _: &str, _: &Dir, _: &Dir) -> io::Result<()> { Ok(()) } // Pinned ancestors cannot be swapped.
     pub fn unchanged(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool { a.len() == b.len() && a.last_write_time() == b.last_write_time() }
-    pub fn publish(dir: &Dir, _: &str, to: &str, content: &File) -> io::Result<()> {
+    pub fn publish(_dir: &Dir, _: &str, to: &str, content: &File) -> io::Result<()> {
+        if to.is_empty() || to == "." || to == ".." || to.bytes().any(|b| matches!(b, 0 | b'/' | b'\\' | b':')) {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput));
+        }
         #[repr(C)]
         struct Rename { replace: u8, root: *mut std::ffi::c_void, length: u32, name: [u16; 1] }
-        // Common Win32 form: full path within the pinned directory, NUL-terminated.
-        let name: Vec<u16> = dir.path.join(to).as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        // Native simple-name/NULL-root rename stays in the content handle's
+        // directory, without Win32 DOS/CWD target-parent resolution.
+        let name: Vec<u16> = std::ffi::OsStr::new(to).encode_wide().chain(std::iter::once(0)).collect();
         let offset = std::mem::offset_of!(Rename, name);
-        let size = std::mem::size_of::<Rename>().max(offset + name.len() * 2);
+        let size = std::mem::size_of::<Rename>() + name.len() * 2;
+        let native_size = u32::try_from(size).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         let mut buffer = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
         let rename = buffer.as_mut_ptr().cast::<Rename>();
+        let mut io_status = IoStatusBlock { status: IoStatus { status: 0 }, information: 0 };
         unsafe {
             (*rename).replace = 0; // Never replace an existing destination.
             (*rename).root = std::ptr::null_mut();
             (*rename).length = ((name.len() - 1) * 2) as u32;
             std::ptr::copy_nonoverlapping(name.as_ptr(), buffer.as_mut_ptr().cast::<u8>().add(offset).cast(), name.len());
-            status(SetFileInformationByHandle(content.as_raw_handle(), 3, rename.cast(), size as u32))
+            // Owned content handles are synchronous: completion precedes return.
+            let result = NtSetInformationFile(content.as_raw_handle(), &mut io_status, rename.cast(), native_size, 10); // FileRenameInformation
+            if result >= 0 { Ok(()) } else { Err(io::Error::from_raw_os_error(RtlNtStatusToDosError(result) as i32)) }
         }
     }
     fn delete(file: &File) -> io::Result<()> {
@@ -635,6 +652,15 @@ mod windows_native_regression {
             output.sync_all()?;
             assert!(content.metadata()?.is_file(), "synthetic partial is not a regular file");
             native::verify_location(&fixture.0, "publication", &root, &dir)?;
+            for invalid in ["", ".", "..", "nested/note.txt", "nested\\note.txt", "C:note.txt", "note.txt:stream", "note\0.txt"] {
+                match native::publish(&dir, ".partial", invalid, &content) {
+                    Err(error) => assert!(error.kind() == io::ErrorKind::InvalidInput,
+                        "native invalid target returned an unexpected error: raw_os_error={:?}, kind={:?}", error.raw_os_error(), error.kind()),
+                    Ok(()) => panic!("native publication accepted a non-simple target"),
+                }
+                assert!(std::fs::read(fixture.0.join("publication/.partial"))? == b"selected", "invalid target changed the owned partial");
+                assert!(std::fs::read(&original_path)? == b"selected", "invalid target changed the original");
+            }
             if let Err(error) = native::publish(&dir, ".partial", "note.txt", &content) {
                 panic!("native publish failed: raw_os_error={:?}, kind={:?}", error.raw_os_error(), error.kind());
             }
