@@ -1,6 +1,7 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
 mod claude;
+mod file_copy;
 mod files;
 mod hooks;
 mod integrations;
@@ -21,7 +22,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 use claude::{Chat, ChatContext, ChatReply};
-use files::DroppedFile;
+use files::{DropCopies, DroppedFile};
 use hooks::{HookPreview, HookStatus};
 use island::{PollGate, ScreenInfo};
 use pipe::Pending;
@@ -173,7 +174,8 @@ fn quit_app(app: AppHandle) {
 /// Tray → Pause. Paused means paused: the pollers stop talking to the network,
 /// not just the island stopping showing things.
 #[tauri::command]
-fn set_paused(paused: bool) {
+fn set_paused(paused: bool, copies: State<DropCopies>) {
+    copies.pause(paused);
     integrations::set_paused(paused);
 }
 
@@ -250,10 +252,28 @@ fn chat_reset(chat: State<Chat>) {
     chat.reset();
 }
 
-/// Copies a dropped file into the inbox and reports its name back.
+/// Keep the current frontend's path-only drop API while preparation moves off
+/// the UI executor. Ready copies are retained until explicit removal or exit.
 #[tauri::command]
-fn ingest_file(path: String) -> Result<DroppedFile, String> {
-    files::ingest(&path)
+async fn ingest_file(path: String, copies: State<'_, DropCopies>) -> Result<DroppedFile, String> {
+    let id = copies.legacy_id();
+    prepare_file(path, id, copies).await
+}
+
+#[tauri::command]
+async fn prepare_file(path: String, operation_id: String, copies: State<'_, DropCopies>) -> Result<DroppedFile, String> {
+    let job = copies.begin(operation_id)?;
+    tauri::async_runtime::spawn_blocking(move || job.run(path))
+        .await
+        .map_err(|_| "File preparation stopped.".to_owned())?
+}
+
+#[tauri::command]
+fn cancel_file_copy(operation_id: String, copies: State<'_, DropCopies>) {
+    if copies.revoke(&operation_id) {
+        let owner = copies.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || owner.cancel(&operation_id));
+    }
 }
 
 /// The island may only ask whether a key exists — never read it.
@@ -374,6 +394,7 @@ pub fn run() {
         })
         .manage(Pending::default())
         .manage(Chat::default())
+        .manage(DropCopies::default())
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
@@ -394,6 +415,8 @@ pub fn run() {
             chat_send,
             chat_reset,
             ingest_file,
+            prepare_file,
+            cancel_file_copy,
             secret_present,
             secret_set,
             secret_clear,
@@ -404,6 +427,8 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            let copies = handle.state::<DropCopies>().inner().clone();
+            tauri::async_runtime::spawn_blocking(move || { let _ = copies.startup(); });
             tray::build(&handle)?;
             // Before the island: see create_settings_window.
             create_settings_window(&handle);
@@ -428,6 +453,24 @@ pub fn run() {
             integrations::start(handle.clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Coucou");
+        .build(tauri::generate_context!())
+        .expect("error while building Coucou")
+        .run(|app, event| {
+            // Covers both quit_app and tray's app.exit(), plus OS-native exit.
+            // Defer termination without waiting for blocking I/O on the UI.
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let copies = app.state::<DropCopies>();
+                if let Some(start_cleanup) = copies.request_exit() {
+                    api.prevent_exit();
+                    if start_cleanup {
+                        let owner = copies.inner().clone();
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            owner.shutdown();
+                            handle.exit(0);
+                        });
+                    }
+                }
+            }
+        });
 }
