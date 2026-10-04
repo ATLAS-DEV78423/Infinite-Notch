@@ -28,7 +28,7 @@ review/checks produced the first partial checkpoint; see
 
 | Stage | Dependencies | Work / required evidence | Current status |
 | --- | --- | --- | --- |
-| A: Reliability foundation | Reviewed first plan | Full hover/delay/independent holds, collision-safe owned copying, truthful ready state, cancellation/stale callback checks | Tauri/Rust source and portable/Linux checks pass; Swift/Windows native milestone remains pending |
+| A: Reliability foundation | Reviewed first plan | Full hover/delay/independent holds, collision-safe owned copying, truthful ready state, cancellation/stale callback checks | Tauri/Linux and Mac hover compiler/test gates pass; Mac owned preparation and Windows full/native interaction gates pending; see native receipt |
 | B: Multi-item shelf | A copy contracts | 32-item temporary files/folders/images/text shelf, remove/clear/order/disable, real native drag-out/open/share/Mail/Messages, bounded traversal and export leases | Not implemented; dedicated plan follows A |
 | C: LocalSend core | Safe native file handles; qualified dependencies/bridge | Opt-in multicast roster, direct/manual address, HTTPS identity, prepare/upload/cancel, consent/save/safe partial commits, byte/integrity tests | Not implemented; native bridge/auth probes needed |
 | D: LocalSend native UI | B and real C events | Devices, send/drop-to-send, incoming prompt, visibility, compact/expanded real progress, seven state labels, cancel, queue/retry/completion | Not implemented; no timed fake progress |

@@ -31,6 +31,12 @@ Preserve the existing stack. Do not change global agent/model/account settings.
 
 ### Windows or Linux
 
+Build-only hosted results are recorded in
+[native qualification](research/native-qualification.md). At `4e9468a`, Mac's
+21 hover cases and three unsigned builds and Linux's full lane passed; Windows's
+standalone lane was 10/11, so its later builds were skipped. These are not native
+UI, hardware, signing or release-qualification receipts.
+
 Requires Node/npm, Rust/Cargo and the native Tauri 2 prerequisites for the target
 OS. The relay is built by the package's existing predev/prebuild hooks.
 

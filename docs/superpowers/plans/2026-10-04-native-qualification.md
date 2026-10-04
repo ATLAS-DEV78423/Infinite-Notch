@@ -145,6 +145,12 @@ not fabricated functional views.
 - Written-plan review is complete; preserve the approved scope and chosen
   subagent-driven method during execution.
 
-**Next action:** Execute the two scoped qualification workers together, centrally
-review their actual changes and run native gates before resuming Mac foundation
-product edits. The full release map was included in the approved review question.
+**Current execution receipt:** [Actual native results](../../research/native-qualification.md).
+Both original workflow workers finished; do not recreate their work. At `4e9468a`
+Mac's five prior checks, 21 new hover cases and all three unsigned builds passed;
+Linux's full lane passed. Windows publication/boundary tests passed but one
+large-file fixture retains a writer and fails; its later build steps are skipped.
+
+**Next action:** Observe the reviewed test-only Windows fixture correction and
+Mac Task 4 readiness RED. Mac Task 2 compiler/test gates passed, but native
+interaction is still pending. Do not redispatch old runs or completed Tauri work.

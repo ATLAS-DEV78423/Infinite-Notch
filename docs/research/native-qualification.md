@@ -139,6 +139,36 @@ Swift GREEN; the new source must pass the real Swift runner and all app builds
 before its native build/test gate is recorded complete. Native input/focus,
 accessibility, screen changes and hardware interaction remain unqualified.
 
+### Actual result: `4e9468a`
+
+Exact source `4e9468afdc090c93e05b4d64482de73ec32e5d70`, independently matched
+to remote HEAD. Existing runs were inspected after interruption, not redispatched.
+
+- [Mac run 37229193086](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37229193086),
+  job 111515071815: **success**. All five existing Swift scripts, **21** real
+  Swift 6 FSM cases and all three unsigned builds passed on the recorded
+  Xcode 26.6 / Swift 6.3.3 ARM64 lane. The actual compact-hover RED at `516bd3c`
+  and this GREEN establish the compiler/pure-test gate, not native usability.
+- [Tauri run 37229193143](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37229193143),
+  Linux job 111515071962: **success**. 109 Node TS/MJS, 25 adapter checks,
+  22 standalone copy, 29 app-library and 10 relay tests; full no-bundle build passed.
+- Same run, Windows job 111515071857: **10 passed / 1 failed** standalone
+  tests after 81 TypeScript passes. Real native publication, invalid-target and
+  collision checks now passed. Relay/workspace/full build were still skipped.
+  The sole failure is `large_file_streams_exact_bytes_in_chunks`.
+
+The remaining Windows fixture writes/syncs 16 MiB but retains its writable handle
+across ingestion. Native source opening intentionally forbids live writers; the
+fixture must close its finished writer. A test-only correction and a Windows
+held-writer refusal/after-close copy regression preserve that production safety
+policy. This is not another publisher change or an all-tests-green claim.
+
+Mac foundation Task 4 now starts with a test-only actual-engine assertion that
+ten seconds without an I/O receipt cannot show check/choose/completed progress.
+The new runner does not yet compile a future actor; native behavioral RED must
+be observed before product copying/readiness changes. Owned-copy, real input,
+sandbox and hardware acceptance remain pending.
+
 ## Still not qualified
 
 Mac full-hover/delay/independent holds and owned asynchronous/truthful preparation;
