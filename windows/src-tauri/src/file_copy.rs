@@ -563,15 +563,16 @@ mod native {
     pub fn publish(dir: &Dir, _: &str, to: &str, content: &File) -> io::Result<()> {
         #[repr(C)]
         struct Rename { replace: u8, root: *mut std::ffi::c_void, length: u32, name: [u16; 1] }
-        let name: Vec<u16> = std::ffi::OsStr::new(to).encode_wide().collect();
+        // Common Win32 form: full path within the pinned directory, NUL-terminated.
+        let name: Vec<u16> = dir.path.join(to).as_os_str().encode_wide().chain(std::iter::once(0)).collect();
         let offset = std::mem::offset_of!(Rename, name);
         let size = std::mem::size_of::<Rename>().max(offset + name.len() * 2);
         let mut buffer = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
         let rename = buffer.as_mut_ptr().cast::<Rename>();
         unsafe {
             (*rename).replace = 0; // Never replace an existing destination.
-            (*rename).root = dir.file.as_raw_handle();
-            (*rename).length = (name.len() * 2) as u32;
+            (*rename).root = std::ptr::null_mut();
+            (*rename).length = ((name.len() - 1) * 2) as u32;
             std::ptr::copy_nonoverlapping(name.as_ptr(), buffer.as_mut_ptr().cast::<u8>().add(offset).cast(), name.len());
             status(SetFileInformationByHandle(content.as_raw_handle(), 3, rename.cast(), size as u32))
         }

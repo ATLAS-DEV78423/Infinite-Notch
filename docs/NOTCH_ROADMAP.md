@@ -13,6 +13,7 @@ derivative with restricted upstream assets without permission.
 - [First executable foundation plan](superpowers/plans/2026-10-04-notch-foundation.md)
 - [Full release execution map and feature routing](RELEASE_READINESS.md)
 - [Approved next native qualification plan](superpowers/plans/2026-10-04-native-qualification.md)
+- [Actual native qualification results and remaining failures](research/native-qualification.md)
 - [Existing agent-inspector plan](superpowers/plans/2026-10-03-agent-session-inspector.md)
 - [Agent verified/pending receipt](research/agent-inspector-verification.md)
 - [Build, verification, privacy and contribution guide](DEVELOPMENT.md)
