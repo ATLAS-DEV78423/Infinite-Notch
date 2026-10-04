@@ -10,6 +10,7 @@ on:
       - 'scripts/test-chat-parsing.sh'
       - 'scripts/test-plan-gauge.sh'
       - 'scripts/test-ask-question.sh'
+      - 'scripts/test-island-fsm.sh'
       - 'tests/**'
       - '.github/workflows/native-macos.yml'
   pull_request:
@@ -20,6 +21,7 @@ on:
       - 'scripts/test-chat-parsing.sh'
       - 'scripts/test-plan-gauge.sh'
       - 'scripts/test-ask-question.sh'
+      - 'scripts/test-island-fsm.sh'
       - 'tests/**'
       - '.github/workflows/native-macos.yml'
   workflow_dispatch:
@@ -123,6 +125,11 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/native-macos/notchbuddy-release" \
             build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
+      - name: Test island hover FSM
+        id: island_fsm
+        if: ${{ always() }}
+        run: bash scripts/test-island-fsm.sh
+
       - name: Summarize limited qualification results
         if: ${{ always() }}
         run: |
@@ -136,6 +143,7 @@ jobs:
           | Chat parsing | ${{ steps.chat_parsing.outcome }} |
           | Plan gauge | ${{ steps.plan_gauge.outcome }} |
           | Ask question | ${{ steps.ask_question.outcome }} |
+          | Island hover FSM | ${{ steps.island_fsm.outcome }} |
           | NotchBuddy Debug (unsigned) | ${{ steps.debug_direct.outcome }} |
           | CoucouAppStore Debug (unsigned) | ${{ steps.debug_appstore.outcome }} |
           | NotchBuddy Release (unsigned) | ${{ steps.release_direct.outcome }} |

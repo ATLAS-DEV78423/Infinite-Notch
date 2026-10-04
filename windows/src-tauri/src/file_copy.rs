@@ -588,3 +588,81 @@ mod native {
     pub fn remove_owner(_: &Dir, _: &str, _: &CleanupMarker) -> io::Result<()> { Ok(()) }
     pub fn reap(_: &Path, _: usize) -> io::Result<ReapOutcome> { Ok(ReapOutcome::default()) }
 }
+
+#[cfg(all(test, windows))]
+mod windows_native_regression {
+    use super::*;
+    use std::io;
+    use std::sync::atomic::AtomicU64;
+
+    static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
+    struct Root(PathBuf);
+    impl Root {
+        fn new() -> io::Result<Self> {
+            let base = std::env::var_os("COUCOU_COPY_TEST_ROOT").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+            std::fs::create_dir_all(&base)?;
+            loop {
+                let path = base.join(format!("coucou-native-publish-{}-{}", std::process::id(), NEXT_ROOT.fetch_add(1, Ordering::Relaxed)));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Ok(Self(path)),
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    }
+    impl Drop for Root {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn native_publish_preserves_bytes_and_refuses_collision() {
+        let result = (|| -> io::Result<()> {
+            let fixture = Root::new()?;
+            let root = native::open_root(&fixture.0)?;
+            let source = native::create_dir(&root, "source")?;
+            let mut original = native::create_file(&source, "original.txt")?;
+            original.write_all(b"selected")?;
+            original.sync_all()?;
+            let original_path = fixture.0.join("source/original.txt");
+
+            let dir = native::create_dir(&root, "publication")?;
+            let content = native::create_file(&dir, ".partial")?;
+            let mut output = content.try_clone()?;
+            output.write_all(b"selected")?;
+            output.flush()?;
+            output.sync_all()?;
+            assert!(content.metadata()?.is_file(), "synthetic partial is not a regular file");
+            native::verify_location(&fixture.0, "publication", &root, &dir)?;
+            if let Err(error) = native::publish(&dir, ".partial", "note.txt", &content) {
+                panic!("native publish failed: raw_os_error={:?}, kind={:?}", error.raw_os_error(), error.kind());
+            }
+            native::verify_location(&fixture.0, "publication", &root, &dir)?;
+            let published = fixture.0.join("publication/note.txt");
+            assert!(!fixture.0.join("publication/.partial").exists(), "publication left the partial name behind");
+            assert!(std::fs::read(&published)? == b"selected", "publication changed synthetic bytes");
+            assert!(std::fs::read(&original_path)? == b"selected", "publication changed the original");
+            // Close both destination handles so sharing restrictions cannot mask
+            // a publisher that mistakenly enables replacement on collision.
+            drop(output);
+            drop(content);
+
+            let mut collision = native::create_file(&dir, ".partial-collision")?;
+            collision.write_all(b"replacement")?;
+            collision.flush()?;
+            collision.sync_all()?;
+            match native::publish(&dir, ".partial-collision", "note.txt", &collision) {
+                Err(error) => assert!(error.kind() == io::ErrorKind::AlreadyExists,
+                    "native collision returned an unexpected error: raw_os_error={:?}, kind={:?}", error.raw_os_error(), error.kind()),
+                Ok(()) => panic!("native publication accepted an existing destination"),
+            }
+            assert!(std::fs::read(&published)? == b"selected", "collision overwrote synthetic destination bytes");
+            assert!(std::fs::read(fixture.0.join("publication/.partial-collision"))? == b"replacement", "collision consumed the owned partial");
+            assert!(std::fs::read(&original_path)? == b"selected", "collision changed the original");
+            Ok(())
+        })();
+        if let Err(error) = result {
+            panic!("native publication fixture/read failed: raw_os_error={:?}, kind={:?}", error.raw_os_error(), error.kind());
+        }
+    }
+}
