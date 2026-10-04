@@ -237,6 +237,14 @@ struct SettingsView: View {
         GroupBox("Behavior") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
+                    Text("Open on hover after")
+                    TextField("0", value: $state.hoverOpenDelayMs, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 64)
+                        .accessibilityLabel("Hover open delay in milliseconds")
+                    Text("ms (0–1000)")
+                }
+                HStack(spacing: 8) {
                     Text("Close after")
                     TextField("60", value: $state.autoCloseInterval, format: .number)
                         .textFieldStyle(.roundedBorder)

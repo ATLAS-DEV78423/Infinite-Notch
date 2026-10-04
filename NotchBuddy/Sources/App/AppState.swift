@@ -33,10 +33,18 @@ final class AppState: ObservableObject {
     var mousePosition: CGPoint = .zero
     var lastMouseMove: Date = .now
     var lastActivity: Date = .now
-    var isPresent: Bool = true
+    var isPresent: Bool = true {
+        didSet { if !isPresent { islandFSM?.cancelTimers() } }
+    }
 
-    // Pinned (alerts that stay open, never auto-close)
-    var isPinned: Bool = false
+    // Compatibility input for HookServer's pins; the FSM owns the one hold set.
+    weak var islandFSM: IslandStateMachine?
+    var isPinned: Bool {
+        get { pendingApproval != nil || pendingQuestion != nil || islandFSM?.hasHold(.approval) == true }
+        set { islandFSM?.setHold(owner: .approval, held: newValue || pendingApproval != nil || pendingQuestion != nil) }
+    }
+    @Published var homeCollapseAt: TimeInterval?
+    @Published var homeCollapseDuration: TimeInterval = 0
 
     // Upload progress (0-1) — set to 1.0 only at completion; animation is time-based
     @Published var uploadProgress: Double = 0
@@ -200,7 +208,19 @@ final class AppState: ObservableObject {
 
     // Auto-close delay — persisted
     @Published var autoCloseInterval: TimeInterval = 15 {
-        didSet { UserDefaults.standard.set(autoCloseInterval, forKey: "autoCloseInterval") }
+        didSet {
+            UserDefaults.standard.set(autoCloseInterval, forKey: "autoCloseInterval")
+            islandFSM?.homeToPetitDelay = autoCloseInterval
+        }
+    }
+
+    // Full-hover delay in milliseconds — old preferences default to immediate.
+    @Published var hoverOpenDelayMs: Int = 0 {
+        didSet {
+            hoverOpenDelayMs = IslandStateMachine.validatedHoverOpenDelayMs(hoverOpenDelayMs)
+            UserDefaults.standard.set(hoverOpenDelayMs, forKey: "hoverOpenDelayMs")
+            islandFSM?.hoverOpenDelayMs = hoverOpenDelayMs
+        }
     }
 
     // Absence interval — persisted
@@ -286,10 +306,18 @@ final class AppState: ObservableObject {
     @Published var chatHistory: [ChatMessage] = []
 
     // Pending approval request from Claude Code hook
-    @Published var pendingApproval: ApprovalInfo? = nil
+    @Published var pendingApproval: ApprovalInfo? = nil {
+        didSet { updateApprovalHold() }
+    }
 
     // Pending AskUserQuestion from Claude Code hook
-    @Published var pendingQuestion: AskQuestion? = nil
+    @Published var pendingQuestion: AskQuestion? = nil {
+        didSet { updateApprovalHold() }
+    }
+
+    func updateApprovalHold() {
+        islandFSM?.setHold(owner: .approval, held: pendingApproval != nil || pendingQuestion != nil)
+    }
 
     #if !APPSTORE
     @Published var musicPlaying: Bool = false
@@ -341,6 +369,7 @@ final class AppState: ObservableObject {
         if let v = ud.object(forKey: "autoCloseInterval") as? Double {
             autoCloseInterval = (v == 60) ? 15 : v
         }
+        hoverOpenDelayMs = IslandStateMachine.validatedHoverOpenDelayMs(ud.object(forKey: "hoverOpenDelayMs") as? Int)
         if let v = ud.object(forKey: "absenceInterval")   as? Double { absenceInterval   = v }
         if let v = ud.object(forKey: "greetThreshold")    as? Double { greetThresholdSeconds = v }
         if let v = ud.object(forKey: "hotkeyEnabled") as? Bool  { hotkeyEnabled = v }

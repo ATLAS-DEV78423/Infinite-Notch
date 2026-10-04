@@ -381,40 +381,18 @@ func botPosition(mode: IslandMode, view: IslandView, islandW: CGFloat, islandH: 
 struct CountdownBar: View {
     @ObservedObject var state: AppState
     let islandW: CGFloat
-    @State private var barWidth: CGFloat = 0
-    @State private var timer: Timer? = nil
 
     var body: some View {
-        GeometryReader { _ in
-            Rectangle()
-                .fill(Color.white.opacity(0.35))
-                .frame(width: barWidth, height: 2)
-                .cornerRadius(2)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        }
-        .onAppear { startTimer() }
-        .onDisappear { timer?.invalidate() }
-    }
-
-    private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            updateBar()
-        }
-    }
-
-    private func updateBar() {
-        guard state.mode == .expanded && !state.isPinned else {
-            barWidth = 0
-            return
-        }
-        let autoClose = state.autoCloseInterval
-        let window = min(10.0, autoClose * 0.6)
-        let elapsed = Date.now.timeIntervalSince(state.lastActivity)
-        let remaining = autoClose - elapsed
-        if remaining < window {
-            barWidth = max(0, CGFloat(remaining / window) * 160)
-        } else {
-            barWidth = 0
+        if state.mode == .expanded, let deadline = state.homeCollapseAt {
+            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                let fraction = IslandStateMachine.countdownFraction(deadline: deadline,
+                    duration: state.homeCollapseDuration, now: ProcessInfo.processInfo.systemUptime)
+                Rectangle()
+                    .fill(Color.white.opacity(0.35))
+                    .frame(width: CGFloat(fraction) * 160, height: 2)
+                    .cornerRadius(2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            }
         }
     }
 }

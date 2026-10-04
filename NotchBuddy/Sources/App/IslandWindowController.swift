@@ -13,8 +13,17 @@ final class IslandWindowController: NSWindowController {
 
     private var wasInIsland = false
     private var frameTimer: Timer?
-    private var keyMonitor: Any?
+    private var eventMonitors: [Any] = []
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var viewSubscription: AnyCancellable?
+    private var fileDragActive = false
+    private var activeMenus: Set<ObjectIdentifier> = []
+    private var inputSuspended = false
+    private var wasInactive = false
+    // An initial outside sample is not a leave: launch must finish its greeting.
+    private var needsPointerSync = false
+    private var isCleanedUp = false
+    private var presentationGeneration = 0
 
     // Confused recovery timer (set by handleDizzy)
     private var confusedRecoveryTimer: DispatchWorkItem?
@@ -94,7 +103,13 @@ final class IslandWindowController: NSWindowController {
         let container = NSView(frame: NSRect(origin: .zero, size: contentSize))
         container.autoresizingMask = [.width, .height]
 
-        let hosting = NSHostingView(rootView: IslandRootView().environmentObject(AppState.shared))
+        let hosting = NSHostingView(rootView: IslandRootView().environmentObject(AppState.shared)
+            .transaction { transaction in
+                if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            })
         hosting.frame = NSRect(origin: .zero, size: contentSize)
         hosting.autoresizingMask = [.width, .height]
 
@@ -104,7 +119,10 @@ final class IslandWindowController: NSWindowController {
         dropView.autoresizingMask = [.width, .height]
         dropView.onDragEntered = { [weak self] loc in
             Task { @MainActor in
-                let iLoc = self?.windowToIsland(loc) ?? CGPoint(x: 320, y: 88)
+                guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return }
+                self.fileDragActive = true
+                self.updateDragHold()
+                let iLoc = self.windowToIsland(loc)
                 AppState.shared.fileDragOver = true
                 // enterZone sets isActive=true BEFORE hookExpand triggers re-render,
                 // so IslandContainer sees isActive=true when state.view becomes .upload.
@@ -115,20 +133,25 @@ final class IslandWindowController: NSWindowController {
         }
         dropView.onDragUpdated = { [weak self] loc in
             Task { @MainActor in
-                let iLoc = self?.windowToIsland(loc) ?? CGPoint(x: 320, y: 88)
+                guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return }
+                let iLoc = self.windowToIsland(loc)
                 UploadSequenceEngine.shared.updateCursor(x: iLoc.x, y: iLoc.y)
             }
         }
-        dropView.onDragExited = {
+        dropView.onDragExited = { [weak self] in
             Task { @MainActor in
+                guard let self, !self.isCleanedUp else { return }
                 AppState.shared.fileDragOver = false
                 // Do NOT collapse — drag session still active; island stays open.
                 NotificationCenter.default.post(name: .botMorphTo, object: CGFloat(0))
                 UploadSequenceEngine.shared.exitZone()
             }
         }
-        dropView.onFilesDropped = { urls in
+        dropView.onFilesDropped = { [weak self] urls in
             Task { @MainActor in
+                guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return }
+                self.fileDragActive = false
+                self.updateDragHold()
                 await FileDropHandler.handle(urls: urls, state: AppState.shared)
             }
         }
@@ -137,18 +160,39 @@ final class IslandWindowController: NSWindowController {
         container.addSubview(dropView)   // z-top: drag only (hitTest→nil, transparent to mouse)
         panel.contentView = container
 
+        wireFSM()
+        panel.onFocusChange = { [weak self] in self?.updateKeyboardHold() }
         startPolling()
         startKeyMonitor()
-        wireFSM()
+        observeInputLifetime()
 
         // Make panel key whenever the prompt/chat view becomes active
         // (nonactivatingPanel never auto-becomes key, but TextField needs it)
         viewSubscription = state.$view
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newView in
-                guard let self else { return }
-                if newView == .prompt {
-                    self.islandPanel.makeKey()
+                let viewName = newView.rawValue
+                Task { @MainActor in
+                    guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent,
+                          self.state.view.rawValue == viewName else { return }
+                    // HookServer also changes alert views directly while already expanded.
+                    if self.state.mode == .expanded {
+                        switch self.state.view {
+                        case .approval, .question, .finished, .error, .confused:
+                            if self.state.view != .confused { self.cancelPresentationTimers() }
+                            if self.fsm.state == .coucou {
+                                NotificationCenter.default.post(name: .greetingInterrupt, object: nil)
+                            }
+                            self.fsm.openedExternally()
+                        default: break
+                        }
+                    }
+                    if self.state.mode == .expanded && (self.state.view == .prompt || self.state.view == .question || self.state.view == .mail) {
+                        self.islandPanel.makeKey()
+                    } else {
+                        self.islandPanel.makeFirstResponder(nil)
+                    }
+                    self.updateKeyboardHold()
                 }
             }
     }
@@ -156,8 +200,18 @@ final class IslandWindowController: NSWindowController {
     // MARK: - FSM wiring
 
     private func wireFSM() {
+        state.islandFSM = fsm
+        fsm.hoverOpenDelayMs = state.hoverOpenDelayMs
+        fsm.homeToPetitDelay = state.autoCloseInterval
+        state.updateApprovalHold()
+        fsm.onDeadlineChange = { [weak self] in
+            guard let self else { return }
+            self.state.homeCollapseAt = self.fsm.homeCollapseAt
+            self.state.homeCollapseDuration = self.fsm.homeCollapseDuration
+        }
         fsm.onTransition = { [weak self] from, to in
             guard let self else { return }
+            self.cancelPresentationTimers()
             switch to {
             case .hidden:
                 self.setMode(.hidden)
@@ -177,29 +231,23 @@ final class IslandWindowController: NSWindowController {
                 // so setting view while already compact won't trigger a spurious open animation.
                 self.setMode(.compact)
                 if from == .coucou { self.state.view = self.defaultView() }
-                // Start 60s hide timer if mouse is not currently over the island
-                if !self.wasInIsland { self.fsm.mouseLeft() }
 
             case .home:
-                self.expand(to: self.defaultView())
-                // Start collapse timer if mouse not currently hovering
-                if !self.wasInIsland {
-                    self.fsm.mouseLeft()
+                if from == .coucou {
+                    NotificationCenter.default.post(name: .greetingInterrupt, object: nil)
                 }
+                self.showExpanded(to: self.defaultView())
 
             case .coucou:
-                self.expand(to: .greeting)
+                self.showExpanded(to: .greeting)
             }
         }
 
         // FSM observes greetComplete notification
-        NotificationCenter.default.addObserver(
-            forName: .greetComplete, object: nil, queue: .main
-        ) { [weak self] _ in
-            self?.fsm.greetComplete()
+        observe(.greetComplete) { [weak self] in
+            guard let self, !self.inputSuspended, self.state.isPresent else { return }
+            self.fsm.greetComplete()
         }
-
-        fsm.isHeldOpen = { AppState.shared.pendingApproval != nil }
     }
 
     // MARK: - 60 Hz polling loop
@@ -213,7 +261,25 @@ final class IslandWindowController: NSWindowController {
     }
 
     private func pollFrame() {
+        guard !isCleanedUp else { return }
+        if inputSuspended || !state.isPresent {
+            if !wasInactive { invalidateInput() }
+            wasInactive = true
+            return
+        }
+        if wasInactive {
+            wasInactive = false
+            needsPointerSync = true
+        }
         guard let panel = window as? IslandPanel else { return }
+
+        updateKeyboardHold()
+        // Native file drags can end outside our destination without another drag callback.
+        if fileDragActive && NSEvent.pressedMouseButtons & 1 == 0 {
+            fileDragActive = false
+            state.fileDragOver = false
+            updateDragHold()
+        }
 
         let mouse = NSEvent.mouseLocation
 
@@ -247,21 +313,28 @@ final class IslandWindowController: NSWindowController {
         }
 
         // AppState can hide the island by itself (last task ended): keep the FSM in step.
-        if state.mode == .hidden && fsm.state == .petit { fsm.hiddenExternally() }
+        if state.mode == .hidden && fsm.state != .hidden {
+            fsm.hiddenExternally()
+            needsPointerSync = true
+        } else if state.mode == .compact && fsm.state == .hidden {
+            fsm.collapsedExternally()
+            needsPointerSync = true
+        }
 
-        // Feed FSM hover enter/leave
-        if inIsland && !wasInIsland {
-            guard !inAttachDrag else { wasInIsland = inIsland; return }
+        // Bookkeeping precedes callbacks, including the first wake-strip sample.
+        let wasInside = wasInIsland
+        wasInIsland = inIsland
+        if inIsland && (!wasInside || needsPointerSync) {
             // If in coucou: tell greeting to stay open (tc → infinity)
             if fsm.state == .coucou {
                 NotificationCenter.default.post(name: .greetingHover, object: nil)
             }
             fsm.mouseEntered()
         }
-        if !inIsland && wasInIsland {
+        if !inIsland && (wasInside || needsPointerSync) {
             fsm.mouseLeft()
         }
-        wasInIsland = inIsland
+        needsPointerSync = false
 
         // Bot-head hover (love emote)
         let overBot = state.mode == .expanded && state.stateOverride == nil && isBotHit(local)
@@ -286,6 +359,125 @@ final class IslandWindowController: NSWindowController {
     }
 
     private var lastMouse: CGPoint = .zero
+
+    // Native focus/drag/menu lifetimes feed separate owners of the same FSM hold set.
+    private func updateKeyboardHold() {
+        let focusedView = islandPanel.firstResponder as? NSView
+        let focused = !inputSuspended && state.isPresent && state.mode == .expanded
+            && islandPanel.isKeyWindow && focusedView?.window === islandPanel
+        fsm.setHold(owner: .keyboard, held: focused)
+    }
+
+    private func updateDragHold() {
+        fsm.setHold(owner: .drag, held: fileDragActive || inAttachDrag || attachDragStart != nil)
+    }
+
+    private func retainMonitor(_ monitor: Any?) {
+        if let monitor { eventMonitors.append(monitor) }
+    }
+
+    private func observe(_ name: Notification.Name, center: NotificationCenter = .default,
+                         object: Any? = nil, action: @escaping @MainActor @Sendable () -> Void) {
+        let token = center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !self.isCleanedUp else { return }
+                action()
+            }
+        }
+        observers.append((center, token))
+    }
+
+    private func observeInputLifetime() {
+        for (name, began) in [(NSMenu.didBeginTrackingNotification, true), (NSPopover.willShowNotification, true),
+                              (NSMenu.didEndTrackingNotification, false), (NSPopover.didCloseNotification, false)] {
+            let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let object = note.object as? NSObject else { return }
+                let id = ObjectIdentifier(object)
+                Task { @MainActor in
+                    guard let self, !self.isCleanedUp else { return }
+                    if began {
+                        guard !self.inputSuspended, self.state.isPresent else { return }
+                        self.activeMenus.insert(id)
+                    } else {
+                        self.activeMenus.remove(id)
+                    }
+                    self.fsm.setHold(owner: .menu, held: !self.activeMenus.isEmpty)
+                }
+            }
+            observers.append((.default, token))
+        }
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            observe(name, center: NSWorkspace.shared.notificationCenter) { [weak self] in
+                guard let self else { return }
+                self.inputSuspended = true
+                self.invalidateInput()
+            }
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            observe(name, center: NSWorkspace.shared.notificationCenter) { [weak self] in
+                self?.inputSuspended = false
+                self?.needsPointerSync = true
+            }
+        }
+        observe(NSApplication.didChangeScreenParametersNotification) { [weak self] in self?.refreshScreen() }
+        observe(NSWindow.willCloseNotification, object: window) { [weak self] in self?.cleanup() }
+        observe(NSApplication.willTerminateNotification) { [weak self] in self?.cleanup() }
+    }
+
+    private func invalidateInput() {
+        // Clear intent before releasing owners: release cannot revive a canceled timer.
+        fsm.cancelTimers()
+        cancelPresentationTimers()
+        wasInIsland = false
+        needsPointerSync = true
+        pendingIslandClick = false
+        attachDragStart = nil
+        inAttachDrag = false
+        fileDragActive = false
+        state.fileDragOver = false
+        hideDragGhost()
+        updateDragHold()
+        activeMenus.removeAll()
+        fsm.setHold(owner: .menu, held: false)
+        islandPanel.makeFirstResponder(nil)
+        islandPanel.resignKey()
+        fsm.setHold(owner: .keyboard, held: false)
+        islandPanel.ignoresMouseEvents = true
+        hoverTimer?.cancel()
+        botHoverTimer?.cancel()
+        botHovering = false
+    }
+
+    private func refreshScreen() {
+        invalidateInput()
+        guard let panel = window as? IslandPanel,
+              let screen = Self.notchScreen() ?? NSScreen.main else { return }
+        let geometry = Self.screenGeometry(for: screen)
+        notchW = geometry.width
+        notchH = geometry.height
+        hasNotch = geometry.hasNotch
+        panel.notchWidth = notchW
+        panel.notchHeight = notchH
+        state.notchWidth = notchW
+        state.notchHeight = notchH
+        state.hasNotch = hasNotch
+        panel.setFrameOrigin(NSPoint(x: screen.frame.midX - panel.frame.width / 2,
+                                     y: screen.frame.maxY - panel.frame.height))
+    }
+
+    private func cancelPresentationTimers() {
+        presentationGeneration += 1
+        if finishedPinTimer != nil {
+            finishedPinTimer?.cancel()
+            finishedPinTimer = nil
+            state.isPinned = false
+        }
+        if confusedRecoveryTimer != nil {
+            confusedRecoveryTimer?.cancel()
+            confusedRecoveryTimer = nil
+            if state.stateOverride == .dizzy { state.stateOverride = nil }
+        }
+    }
 
     // MARK: - Bot-head hover (love emote — mirrors prototype botHover())
 
@@ -334,18 +526,30 @@ final class IslandWindowController: NSWindowController {
         let prev = state.mode
         guard mode != prev else { return }
         let shrinking = modeLevel(mode) < modeLevel(prev)
-        let anim: Animation = shrinking
+        let anim: Animation? = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : (shrinking
             ? .timingCurve(0.45, 0, 0.2, 1, duration: 0.34)
-            : .spring(response: 0.5, dampingFraction: 0.72)
+            : .spring(response: 0.5, dampingFraction: 0.72))
         withAnimation(anim) { state.mode = mode }
         if mode == .expanded { SoundEngine.shared.play("open") }
         if prev == .expanded {
             SoundEngine.shared.play("close")
-            if fsm.isHeldOpen?() != true { state.isPinned = false }
+            islandPanel.makeFirstResponder(nil)
+            islandPanel.resignKey()
+            updateKeyboardHold()
         }
     }
 
     func expand(to view: IslandView) {
+        guard !isCleanedUp, !inputSuspended, state.isPresent else { return }
+        cancelPresentationTimers()
+        if fsm.state == .coucou && view != .greeting {
+            NotificationCenter.default.post(name: .greetingInterrupt, object: nil)
+        }
+        fsm.openedExternally()
+        showExpanded(to: view)
+    }
+
+    private func showExpanded(to view: IslandView) {
         state.view = view
         if state.mode == .expanded {
             // Already expanded — just switch view
@@ -356,9 +560,11 @@ final class IslandWindowController: NSWindowController {
     }
 
     func collapse() {
-        guard fsm.isHeldOpen?() != true else { return }
-        state.isPinned = false
-        finishedPinTimer?.cancel()
+        guard !state.isPinned else { return }
+        cancelPresentationTimers()
+        islandPanel.makeFirstResponder(nil)
+        islandPanel.resignKey()
+        updateKeyboardHold()
         // Keep the FSM in step with what is on screen (home/coucou → petit now).
         fsm.collapse()
         setMode(.compact)
@@ -368,55 +574,87 @@ final class IslandWindowController: NSWindowController {
     // MARK: - Keyboard (Escape closes)
 
     private func startKeyMonitor() {
-        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        retainMonitor(NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let code = event.keyCode
+            let flags = event.modifierFlags.intersection([.command, .control, .option, .shift]).rawValue
             Task { @MainActor in
-                guard let self = self else { return }
-                if event.keyCode == 53 { // Escape
-                    if self.state.mode == .expanded && !self.state.isPinned {
-                        self.collapse()
-                    }
+                guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return }
+                if code == 53 {
+                    self.finishDrag(attach: false)
+                    if self.state.mode == .expanded { self.collapse() }
+                } else if self.state.hotkeyEnabled, flags == self.state.hotkeyFlags, code == self.state.hotkeyCode {
+                    if self.state.mode != .expanded { self.expand(to: self.defaultView()) }
                 }
             }
-        }
+        })
+        retainMonitor(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let handled = MainActor.assumeIsolated {
+                guard let self, !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return false }
+                let flags = event.modifierFlags.intersection([.command, .control, .option, .shift]).rawValue
+                if self.state.hotkeyEnabled, flags == self.state.hotkeyFlags, event.keyCode == self.state.hotkeyCode {
+                    if self.state.mode != .expanded { self.expand(to: self.defaultView()) }
+                    return true
+                }
+                guard event.window === self.islandPanel else { return false }
+                self.updateKeyboardHold()
+                if event.keyCode == 53 {
+                    self.finishDrag(attach: false)
+                    guard !self.state.isPinned else { return false }
+                    self.collapse()
+                    return true
+                }
+                self.resetActivity()
+                return false
+            }
+            return handled ? nil : event
+        })
 
         // Hook server expand requests (alerts only)
-        NotificationCenter.default.addObserver(forName: .hookExpand, object: nil, queue: .main) { [weak self] note in
-            guard let self, let view = note.object as? IslandView else { return }
-            self.fsm.openedExternally()
-            self.expand(to: view)
+        let expandObserver = NotificationCenter.default.addObserver(forName: .hookExpand, object: nil, queue: .main) { [weak self] note in
+            guard let viewName = (note.object as? IslandView)?.rawValue else { return }
+            Task { @MainActor in
+                guard let self, !self.isCleanedUp, let view = IslandView(rawValue: viewName) else { return }
+                self.expand(to: view)
+            }
         }
+        observers.append((.default, expandObserver))
 
         // Hook server compact reveal (non-alert work events: session start, tool use, etc.)
-        NotificationCenter.default.addObserver(forName: .hookReveal, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
+        observe(.hookReveal) { [weak self] in
+            guard let self, !self.inputSuspended, self.state.isPresent else { return }
             self.fsm.reveal()
         }
 
         // Music started playing: reveal silently (no peek sound)
-        NotificationCenter.default.addObserver(forName: .musicReveal, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
+        observe(.musicReveal) { [weak self] in
+            guard let self, !self.inputSuspended, self.state.isPresent else { return }
             self.silentNextReveal = true
             self.fsm.reveal()
             self.silentNextReveal = false
         }
 
         // Collapse requests from views (OK button, etc.)
-        NotificationCenter.default.addObserver(forName: .islandCollapse, object: nil, queue: .main) { [weak self] _ in
+        observe(.islandCollapse) { [weak self] in
             self?.collapse()
         }
 
         // .botDizzy — posted by BotEngine.slap() on 3rd hit; show confused view + recover after 3.3s
-        NotificationCenter.default.addObserver(forName: .botDizzy, object: nil, queue: .main) { [weak self] _ in
+        observe(.botDizzy) { [weak self] in
             self?.handleDizzy()
         }
 
         // Window attach drag.
         // Uses MainActor.assumeIsolated (synchronous) to avoid race with pollFrame().
         // Global mouseUp is the reliable fallback when cursor is outside our panel frame.
-        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+        retainMonitor(NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self else { return event }
             MainActor.assumeIsolated {
-                guard self.wasInIsland else { return }
+                guard !self.isCleanedUp, !self.inputSuspended, self.state.isPresent,
+                      event.window === self.islandPanel,
+                      self.islandPanel.currentIslandFrame(nw: self.notchW, nh: self.notchH).contains(event.locationInWindow) else { return }
+                self.wasInIsland = true
+                self.needsPointerSync = false
+                self.fsm.mouseEntered()
                 self.pendingIslandClick = true
                 self.hoverTimer?.cancel()
                 self.botHoverTimer?.cancel()
@@ -424,16 +662,18 @@ final class IslandWindowController: NSWindowController {
                 // Drag only starts when clicking directly on the bot head
                 guard self.isBotHit(event.locationInWindow) else { return }
                 self.attachDragStart = NSEvent.mouseLocation
+                self.updateDragHold()
                 // Post slap only when expanded
                 guard self.state.mode == .expanded else { return }
                 NotificationCenter.default.post(name: .triggerSlap, object: nil)
             }
             return event
-        }
-        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDragged) { [weak self] event in
+        })
+        retainMonitor(NSEvent.addLocalMonitorForEvents(matching: .leftMouseDragged) { [weak self] event in
             guard let self else { return event }
             MainActor.assumeIsolated {
-                guard let start = self.attachDragStart, !self.inAttachDrag else { return }
+                guard !self.isCleanedUp, !self.inputSuspended, self.state.isPresent,
+                      let start = self.attachDragStart, !self.inAttachDrag else { return }
                 let m = NSEvent.mouseLocation
                 guard hypot(m.x - start.x, m.y - start.y) > 3 else { return }
                 self.inAttachDrag = true
@@ -441,68 +681,45 @@ final class IslandWindowController: NSWindowController {
                 self.showDragGhost()
             }
             return event
-        }
+        })
 
         // mouseUp — local (cursor still in panel) + global (cursor moved outside panel frame)
-        let finishDrag: @Sendable () -> Void = { [weak self] in
-            Task { @MainActor in
-                guard let self, self.inAttachDrag else { return }
-                let mouse = NSEvent.mouseLocation
-                self.inAttachDrag = false
-                self.attachDragStart = nil
-                self.state.stateOverride = nil
-                self.hideDragGhost()
-                #if !APPSTORE
-                if let ctx = self.windowContextAtPoint(mouse) {
-                    self.state.promptContext = ctx
-                    SoundEngine.shared.play("approve")
-                    NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
-                    self.expand(to: .prompt)
-                }
-                #endif
-            }
-        }
-        NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+        retainMonitor(NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
             guard let self else { return event }
             MainActor.assumeIsolated {
+                guard !self.isCleanedUp, !self.inputSuspended, self.state.isPresent else { return }
                 let hadPendingClick = self.pendingIslandClick
                 let wasDragging     = self.inAttachDrag
                 self.pendingIslandClick = false
                 if wasDragging {
-                    finishDrag()
+                    self.finishDrag()
                 } else {
                     self.attachDragStart = nil
-                    if hadPendingClick && self.state.mode != .expanded {
-                        if self.fsm.state == .home {
+                    if hadPendingClick {
+                        self.cancelPresentationTimers()
+                        if self.fsm.state == .home && self.state.mode != .expanded {
                             // FSM already thinks it's open (e.g. the view folded it): just reopen.
                             self.expand(to: self.defaultView())
                         } else {
-                            self.fsm.click()   // FSM petit/hidden→home; onTransition calls expand(to:)
+                            self.fsm.click()
                         }
                     }
+                    self.fileDragActive = false
+                    self.updateDragHold()
                 }
             }
             return event
-        }
-        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in
-            finishDrag()
-        }
-
-        // Global hotkey to show island
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        })
+        retainMonitor(NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.state.hotkeyEnabled else { return }
-                let pressed = event.modifierFlags.intersection([.command, .control, .option, .shift]).rawValue
-                guard pressed == self.state.hotkeyFlags, event.keyCode == self.state.hotkeyCode else { return }
-                if self.state.mode == .hidden || self.state.mode == .compact {
-                    self.expand(to: .overview)
-                }
+                guard let self, !self.isCleanedUp else { return }
+                self.finishDrag()
             }
-        }
+        })
 
         // Track last external app for window context capture
         let ourBundle = Bundle.main.bundleIdentifier ?? ""
-        NSWorkspace.shared.notificationCenter.addObserver(
+        let activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil, queue: .main
         ) { [weak self] note in
@@ -512,6 +729,29 @@ final class IslandWindowController: NSWindowController {
                 self.state.lastExternalApp = app
             }
         }
+        observers.append((NSWorkspace.shared.notificationCenter, activationObserver))
+    }
+
+    private func finishDrag(attach: Bool = true) {
+        let wasDragging = inAttachDrag
+        inAttachDrag = false
+        attachDragStart = nil
+        pendingIslandClick = false
+        fileDragActive = false
+        state.fileDragOver = false
+        if wasDragging {
+            state.stateOverride = nil
+            hideDragGhost()
+            #if !APPSTORE
+            if attach, !inputSuspended, state.isPresent, let ctx = windowContextAtPoint(NSEvent.mouseLocation) {
+                state.promptContext = ctx
+                SoundEngine.shared.play("approve")
+                NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+                expand(to: .prompt)
+            }
+            #endif
+        }
+        updateDragHold()
     }
 
     // MARK: - Drag ghost window (Mochi follows cursor during drag)
@@ -710,6 +950,7 @@ final class IslandWindowController: NSWindowController {
 
     func defaultView() -> IslandView {
         if state.pendingApproval != nil { return .approval }
+        if state.pendingQuestion != nil { return .question }
         return state.tasks.isEmpty ? .empty : .overview
     }
 
@@ -722,18 +963,24 @@ final class IslandWindowController: NSWindowController {
 
     func resetActivity() {
         state.lastActivity = .now
+        cancelPresentationTimers()
+        fsm.userInteracted()
     }
 
     // MARK: - Finished task pin (5.2s)
 
     func pinForFinished(taskId: String) {
+        cancelPresentationTimers()
         state.isPinned = true
-        finishedPinTimer?.cancel()
+        let generation = presentationGeneration
         let item = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.state.removeTask(id: taskId)
-            self.state.isPinned = false
-            self.collapse()
+            Task { @MainActor in
+                guard let self, !self.isCleanedUp, self.presentationGeneration == generation else { return }
+                self.finishedPinTimer = nil
+                self.state.removeTask(id: taskId)
+                self.state.isPinned = false
+                self.collapse()
+            }
         }
         finishedPinTimer = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 5.2, execute: item)
@@ -742,18 +989,22 @@ final class IslandWindowController: NSWindowController {
     // MARK: - Dizzy recovery (triggered by BotEngine.slap via .botDizzy)
 
     private func handleDizzy() {
+        guard !inputSuspended, state.isPresent else { return }
         let prevView = state.view
-        state.stateOverride = .dizzy
         expand(to: .confused)
-        confusedRecoveryTimer?.cancel()
+        state.stateOverride = .dizzy
+        let generation = presentationGeneration
         let recovery = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.state.stateOverride = nil
-            if self.state.view == .confused {
-                let fallback = self.state.tasks.isEmpty ? IslandView.empty : .overview
-                self.state.view = (prevView == .confused) ? fallback : prevView
+            Task { @MainActor in
+                guard let self, !self.isCleanedUp, self.presentationGeneration == generation else { return }
+                self.confusedRecoveryTimer = nil
+                self.state.stateOverride = nil
+                if self.state.view == .confused {
+                    let fallback = self.state.tasks.isEmpty ? IslandView.empty : .overview
+                    self.state.view = (prevView == .confused) ? fallback : prevView
+                }
+                NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
             }
-            NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
         }
         confusedRecoveryTimer = recovery
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.3, execute: recovery)
@@ -810,8 +1061,27 @@ final class IslandWindowController: NSWindowController {
         )
     }
 
-    nonisolated func cleanup() {
-        // Called explicitly before release if needed
+    override func close() {
+        cleanup()
+        super.close()
+    }
+
+    func cleanup() {
+        guard !isCleanedUp else { return }
+        isCleanedUp = true
+        invalidateInput()
+        frameTimer?.invalidate()
+        frameTimer = nil
+        viewSubscription?.cancel()
+        viewSubscription = nil
+        for monitor in eventMonitors { NSEvent.removeMonitor(monitor) }
+        eventMonitors.removeAll()
+        for (center, observer) in observers { center.removeObserver(observer) }
+        observers.removeAll()
+        islandPanel.onFocusChange = nil
+        fsm.onTransition = nil
+        fsm.onDeadlineChange = nil
+        if state.islandFSM === fsm { state.islandFSM = nil }
     }
 }
 
@@ -820,6 +1090,23 @@ final class IslandWindowController: NSWindowController {
 final class IslandPanel: NSPanel {
     var notchWidth:  CGFloat = IslandConst.notchWidth
     var notchHeight: CGFloat = IslandConst.notchHeight
+    var onFocusChange: (() -> Void)?
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let changed = super.makeFirstResponder(responder)
+        if changed { onFocusChange?() }
+        return changed
+    }
+
+    override func becomeKey() {
+        super.becomeKey()
+        onFocusChange?()
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        onFocusChange?()
+    }
 
     override var canBecomeKey:  Bool { true }
     override var canBecomeMain: Bool { false }
