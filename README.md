@@ -1,3 +1,8 @@
+> **Infinite-Notch development fork:** source checkpoints only—not release-ready.
+> See [development status and build/check instructions](docs/DEVELOPMENT.md) and
+> the [expansion roadmap](docs/NOTCH_ROADMAP.md). Upstream Coucou branding/assets
+> remain subject to [their separate license](LICENSE-ASSETS.md).
+
 <div align="center">
 
 <img src="NotchBuddy/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="96" alt="Coucou icon">
