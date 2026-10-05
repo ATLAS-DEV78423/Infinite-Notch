@@ -30,6 +30,7 @@ enum FilePreparationTests {
             ("normal_gulp_and_shrink_geometry_preserved", normal_gulp_and_shrink_geometry_preserved),
             ("sleep_catch_up_is_bounded", sleep_catch_up_is_bounded),
             ("reduced_motion_keeps_actual_readiness", reduced_motion_keeps_actual_readiness),
+            ("future_lease_lifetime_remove_keeps_open_consumer_path", future_lease_lifetime_remove_keeps_open_consumer_path),
         ]
         for (name, run) in cases {
             testDiagnostic("RUN \(name)")
@@ -581,6 +582,50 @@ enum FilePreparationTests {
         let ready = engine.frame(at: clock(10), reducedMotion: true)
         precondition(ready.progress == 1 && ready.chooseAlpha == 1 && abs(ready.d - 62) < 0.000_001)
         await copies.shutdown()
+    }
+
+    static func future_lease_lifetime_remove_keeps_open_consumer_path() async throws {
+        testDiagnostic("SETUP future_lease_lifetime_exclusive_fixture")
+        guard let path = ProcessInfo.processInfo.environment["COUCOU_PREPARATION_TEST_ROOT"] else {
+            throw FilePreparationError.storage
+        }
+        let fixture = URL(fileURLWithPath: try posixCanonicalPath(path)).appendingPathComponent(UUID().uuidString)
+        guard Darwin.mkdir(fixture.path, mode_t(0o700)) == 0 else { throw FilePreparationError.storage }
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let expected = Data([3, 1, 4, 1, 5])
+        let source = fixture.appendingPathComponent("consumer.bin")
+        try expected.write(to: source, options: .withoutOverwriting)
+        let copies = FilePreparation(root: fixture.appendingPathComponent("copies"))
+        let id = UUID()
+        let readyPathPresent: Bool
+        let consumed: Data?
+        let original: Data
+        do {
+            testDiagnostic("COPY future_lease_lifetime_prepare")
+            let receipt = try await copies.prepare(source: source, operationID: id)
+            testDiagnostic("SETUP future_lease_lifetime_consumer_open")
+            let consumer = try FileHandle(forReadingFrom: receipt.url)
+            defer { try? consumer.close() }
+            // Future lease-lifetime regression: this is a real open consumer, not a registered native lease.
+            // Use today's real cancellation/disposal boundary until the shelf lease/remove API exists.
+            testDiagnostic("REMOVE future_lease_lifetime_native_cancel")
+            await copies.cancel(operationID: id)
+            var info = stat()
+            readyPathPresent = Darwin.lstat(receipt.url.path, &info) == 0
+            consumed = try consumer.readToEnd() // Read the retained descriptor while its pathname may be gone.
+            original = try Data(contentsOf: source)
+        } catch {
+            await copies.shutdown()
+            throw error
+        }
+        await copies.shutdown() // Close the consumer and clean native ownership before any assertion trap.
+        testDiagnostic("ASSERT future_lease_lifetime_original_untouched")
+        precondition(original == expected, "future_lease_lifetime: the original bytes must remain untouched")
+        testDiagnostic("ASSERT future_lease_lifetime_open_consumer_bytes")
+        precondition(consumed == expected, "future_lease_lifetime: the real open consumer must still read the copied bytes")
+        testDiagnostic("ASSERT future_lease_lifetime_ready_path_survives")
+        precondition(readyPathPresent,
+                     "future_lease_lifetime_remove_keeps_open_consumer_path: removal must retain the managed ready pathname while the native consumer is open")
     }
 
     static func clock(_ elapsed: Double) -> Date { Date(timeIntervalSinceReferenceDate: 1000 + elapsed) }

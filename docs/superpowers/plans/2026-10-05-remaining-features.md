@@ -10,7 +10,7 @@
 
 **Spec:** [Approved expansion contract](../specs/2026-10-04-notch-app-expansion-design.md), all sections; [approved inspector contract](../specs/2026-10-03-agent-session-inspector-design.md).
 
-**Status:** New planning deliverable awaiting user review. Master spec and subagent-driven method are already approved. This is the complete execution map, not permission to implement unresolved platform capabilities or publish binaries. The linked shelf plan is the next implementation slice; later slices receive reviewed concrete interfaces after their capability gates.
+**Status:** User approved this execution map and the linked shelf/capability plans on 2026-10-05 through “Approve and continue”. Existing subagent-driven method preserved. This is the complete execution map, not permission to implement unresolved platform capabilities or publish binaries. Shelf S1a starts first; later slices receive reviewed concrete interfaces after their capability gates.
 
 ## Global Constraints
 

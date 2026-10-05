@@ -245,6 +245,36 @@ mod tests {
     }
 
     #[test]
+    fn cancel_preserves_ready_path_until_native_reader_closes() {
+        use std::io::Read;
+        let root = Root::new();
+        // source() closes its writer before native Windows sharing checks.
+        let source = root.source();
+        let copies = root.copies();
+        let ready = copies.begin("reader-held".into())
+            .unwrap_or_else(|_| panic!("synthetic copy admission failed"))
+            .run(source.clone())
+            .unwrap_or_else(|_| panic!("synthetic copy preparation failed"));
+        let mut consumer = std::fs::File::open(&ready.path)
+            .unwrap_or_else(|_| panic!("synthetic native reader could not open"));
+
+        copies.cancel("reader-held");
+        let mut bytes = Vec::new();
+        consumer.read_to_end(&mut bytes)
+            .unwrap_or_else(|_| panic!("synthetic native reader could not read after cancel"));
+        let path_usable = std::fs::File::open(&ready.path).is_ok();
+        // Observe pathname usability with the reader open, then clean up even
+        // when the lifecycle assertion below fails against the current owner.
+        drop(consumer);
+        copies.shutdown();
+        assert!(bytes == b"synthetic", "cancel changed native reader bytes");
+        let original = std::fs::read(source)
+            .unwrap_or_else(|_| panic!("synthetic original could not be read"));
+        assert!(original == b"synthetic", "cancel changed original bytes");
+        assert!(path_usable, "cancel invalidated ready managed pathname while native read consumer was open");
+    }
+
+    #[test]
     fn pause_revokes_pending_job_without_removing_ready_copy() {
         let root = Root::new();
         let source = root.source();

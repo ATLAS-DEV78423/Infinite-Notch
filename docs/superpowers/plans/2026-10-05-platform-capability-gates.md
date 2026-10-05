@@ -10,7 +10,7 @@
 
 **Spec:** [Approved expansion sections 3, 6–10, 13](../specs/2026-10-04-notch-app-expansion-design.md), [execution map](2026-10-05-remaining-features.md), existing [source inventory](../../research/notch-app-readiness.md).
 
-**Status:** Awaiting review. These tasks qualify contracts, not product-ready feature claims. Old inventory facts are leads, not current supported-runtime evidence. Product subsystem plans follow accepted results; no guessed library/API is installed merely to fill a planning box.
+**Status:** User approved this gate plan with the execution map and shelf plan on 2026-10-05 through “Approve and continue”. These tasks qualify contracts, not product-ready feature claims. Old inventory facts are leads, not current supported-runtime evidence. Product subsystem plans follow accepted results; no guessed library/API is installed merely to fill a planning box.
 
 ## Global Constraints
 

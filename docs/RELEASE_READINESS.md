@@ -41,7 +41,7 @@ The [remaining-feature execution plan](superpowers/plans/2026-10-05-remaining-fe
 now routes all 53 feature/settings rows to concrete work packages, including a
 [detailed shelf plan](superpowers/plans/2026-10-05-temporary-shelf.md) and
 [native capability gates](superpowers/plans/2026-10-05-platform-capability-gates.md).
-These new plans await review. Latest native build/test source `76b4ee2` passes
+The user approved these plans on 2026-10-05; shelf S1a starts tests-first. Latest native build/test source `76b4ee2` passes
 Mac 21 hover / 22 preparation cases and all three unsigned builds, plus both
 Windows/Linux full lanes; real device and complete-feature gates remain separate.
 

@@ -10,7 +10,7 @@
 
 **Spec:** [Expansion sections 5, 10, 13](../specs/2026-10-04-notch-app-expansion-design.md); [remaining-feature map](2026-10-05-remaining-features.md).
 
-**Status:** Awaiting written-plan review. Native foundation build/tests passed at `76b4ee2`; real device and restart/export safety are additional shelf gates, not inferred prerequisites already passed.
+**Status:** User approved this written plan, including proposed text/image bounds, on 2026-10-05 through “Approve and continue”. S1a tests-first execution has started; no shelf/native-consumer completion is inferred. Native foundation build/tests passed at `76b4ee2`; real device and restart/export safety are additional shelf gates.
 
 ## Global Constraints
 
