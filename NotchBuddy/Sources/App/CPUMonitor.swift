@@ -77,7 +77,7 @@ actor CPUMonitor {
     private(set) var lastSkip: CPUSampleSkip?
     private(set) var interval: TimeInterval = CPUMonitor.minimumInterval
 
-    private var hostPort: port_t?
+    private var hostPort: mach_port_t?
     private var previous: CPUTicks?
     private var lastSample: ContinuousClock.Instant?
     /// Consecutive aggregate readings pinned to a constant 0 or 100.
@@ -158,7 +158,7 @@ actor CPUMonitor {
         return min(100, max(0, percent))
     }
 
-    private func acquireHostPort() -> port_t? {
+    private func acquireHostPort() -> mach_port_t? {
         if let hostPort { return hostPort }
         // <mach/mach.h> host_self(): the NON-privileged host port, already granted to every process.
         // host_priv_self() is never used; it needs privileges this app does not want.

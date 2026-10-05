@@ -772,5 +772,11 @@ private func preparationErrorCase(_ error: FilePreparationError) -> String {
     case .duplicateOperation: return "duplicateOperation"
     case .busy: return "busy"
     case .capacity: return "capacity"
+    case .tooManyEntries: return "tooManyEntries"
+    case .tooDeep: return "tooDeep"
+    case .unsupportedEntry: return "unsupportedEntry"
+    case .alreadyExists: return "alreadyExists"
+    case .textTooLarge: return "textTooLarge"
+    case .invalidText: return "invalidText"
     }
 }
