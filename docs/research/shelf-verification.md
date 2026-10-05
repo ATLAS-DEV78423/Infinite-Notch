@@ -102,8 +102,58 @@ operation directory containing any extra entry.
 
 Portable re-checks after the fixes: 109 Node TS/MJS tests, 66 Python relay tests,
 `tsc --noEmit`, `vite build`, `bash -n` on all 13 scripts, and workflow YAML parse.
-Swift and Rust remain unexecuted locally, and one review predicts the Rust compiles
-clean with dead-code warnings only for the not-yet-wired S2 commands.
+Swift and Rust remain unexecuted locally.
+
+### Observed at `73f8637`: Mac GREEN, Rust compile RED
+
+[Mac run 37337616989](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37337616989)
+**passed**: 13 screen-geometry, 15 safe-links, 21 hover FSM, **23 file-preparation**
+cases (including the 23rd lifetime case through a registered native lease),
+**19 new shelf-storage cases**, and all three unsigned builds. This is the first real
+native GREEN for S1a on macOS: Swift 6 strict-concurrency compiles and every
+owned-root assertion passes. It is not release, device or consumer acceptance.
+
+[Tauri run 37337617031](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37337617031)
+**failed to compile** on both Windows and Linux at one shared cause:
+`error[E0382]: borrow of moved value: operation` at `files.rs:793`, introduced by a
+review-round edit that asserted on `operation` after `begin_shelf(item, operation)`
+had already moved it. Fixed by cloning at the call site. Standalone native copy suites
+and both relay builds passed before that step; full Tauri builds were skipped after
+the failure, so they are not verified.
+
+### Second review round: security findings fixed
+
+Seven read-only passes covered Rust native correctness, Rust compile risk, the Swift
+actor, the Swift tests, CI/lockfile wiring, agent-privacy security and native-file
+security. Fixes applied in this round:
+
+- **HIGH (privacy).** `is_private_event` classifies on the agent's own self-declared
+  `coucou_agent`, so a packet declaring a different agent opts out of the private
+  route and its unbounded `hook_event_name` was written verbatim to the on-disk log —
+  the only path by which agent-authored text persisted. Event names are now length-
+  and charset-bounded before any log call, on both the Rust and the Swift side.
+- **MEDIUM (privacy).** The transport allowlist delegated `session_id`/`cwd` bounds to
+  a consumer that only exists on Windows; macOS has no bounded consumer. Both are now
+  rejected at the transport on both platforms.
+- **MEDIUM (privacy).** The Hermes adapter forwarded a host-supplied absolute `cwd`
+  the agent controls. No Hermes hook payload carries a trustworthy session directory,
+  so it is no longer forwarded — matching what OpenCode already does by pinning to
+  its registration scope.
+- **MEDIUM (native files).** `startup()` discarded its result, so one planted entry
+  or a missing `/proc` silently disabled file preparation for the whole session with
+  no diagnostic. The failure is now logged.
+- **LOW (native files).** The Swift busy path inserted into `retired` with no 4096
+  bound, unlike every other path, so unbounded growth could deny all later work. It
+  now uses the bounded helper.
+
+Second review round is otherwise not closed. Accepted limits, deliberately unchanged:
+native disposal runs under the global state lock (correct lock order, no deadlock,
+but a latency ceiling); `cleanupFailed` is a process-wide latch that also refuses
+unrelated preparations; `remove_content`/`remove_dir` verify identity through a
+handle they drop before unlinking by name; the Linux reaper skips an operation
+directory containing any extra entry; Windows has no crash reaper, so orphaned copies
+accumulate across force-kills (this is S1c); and the shelf has no IPC surface yet, so
+its security review covers the internal API rather than a real IPC boundary.
 
 Observe actual hosted RED before native asset/lease implementation. Then test real
 registered acquire/remove/release lifetimes, unknown/duplicate/cross-asset IDs,

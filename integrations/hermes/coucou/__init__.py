@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ntpath
 import os
 import re
 import unicodedata
@@ -47,9 +46,11 @@ def build_payload(
         "coucou_agent": AGENT,
         "session_id": session_id,
     }
-    cwd = metadata.get("cwd")
-    if _bounded(cwd, 1024) and (os.path.isabs(cwd) or ntpath.isabs(cwd)):
-        payload["cwd"] = cwd
+    # No cwd. No Hermes hook payload carries a trustworthy session directory: the
+    # plugin context exposes one only through a prompt-mutating API, and the
+    # shell-hook envelope that does carry cwd is a different hook system. A host
+    # supplied path is agent-authored, so forwarding it would let an agent point
+    # the displayed directory anywhere. Unavailable is the honest answer.
     tool_name = metadata.get("tool_name")
     if _bounded(tool_name, 256) and re.fullmatch(r"[\w.:-]+", tool_name):
         payload["tool_name"] = tool_name

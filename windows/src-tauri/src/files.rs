@@ -782,7 +782,7 @@ mod tests {
         assert!(copies.release(&lease.lease_id).is_err(), "failed native cleanup was promoted as successful release");
         for index in 2..=32 { let _ = shelf_copy(&source, &copies, index); }
         let (item, operation) = shelf_ids(33);
-        assert!(copies.begin_shelf(item, operation).is_err(), "failed disposal was evicted from the native asset ceiling");
+        assert!(copies.begin_shelf(item, operation.clone()).is_err(), "failed disposal was evicted from the native asset ceiling");
         assert!(copies.shutdown_checked().is_err(), "failed native cleanup was promoted as successful shutdown");
         // Reported, not silent — and the app can still quit: the unremovable
         // foreign entry is one no retry can ever clear.

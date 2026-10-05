@@ -171,7 +171,7 @@ actor FilePreparation {
         }
         // ponytail: one active copy, no ingest queue; shelf admission explicitly refuses concurrent preparation.
         guard active == nil else {
-            retired.insert(operationID)
+            retireUnseen(operationID) // Bounded like every other retired ID; an unbounded set denies all work.
             throw FilePreparationError.busy
         }
         let assetID: UUID?

@@ -390,7 +390,12 @@ final class HookServer: @unchecked Sendable {
             agentId = "integration_claude"
             isExternalAgent = false
         } else {
-            if !privateEvent { nbLog("Ignored \(name) from \(termProgram.isEmpty ? bundleId : termProgram) (\(projectName))") }
+            if !privateEvent {
+                // `name` is agent-authored and a packet can opt out of the
+                // private filter, so never log it unbounded.
+                let logged = Self.plainEventName(name) ? name : "?"
+                nbLog("Ignored \(logged) from \(termProgram.isEmpty ? bundleId : termProgram) (\(projectName))")
+            }
             return
         }
 
@@ -537,6 +542,13 @@ final class HookServer: @unchecked Sendable {
             || payload["coucou_monitor"] != nil
     }
 
+    /// An event name is short and identifier-shaped by construction. Anything
+    /// else is agent-authored free text and must never reach a log line.
+    private static func plainEventName(_ name: String) -> Bool {
+        !name.isEmpty && name.utf8.count <= 48
+            && name.utf8.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" as UInt8) }
+    }
+
     // Direct socket clients need the relay allowlist too. This does not replace
     // the monitor consumer's bounds, enum validation or safe-preview scrubbing.
     private static func privateFields(_ payload: [String: Any], group: String = "envelope") -> [String: Any] {
@@ -574,6 +586,14 @@ final class HookServer: @unchecked Sendable {
             }
             if group == "approvals" && key == "reason"
                 && !["permission_required", "policy", "unknown"].contains(value as? String ?? "") { continue }
+            // Bounds the Windows consumer already applies. macOS has no bounded
+            // consumer for these, so the transport must reject outright.
+            if group == "envelope" && key == "session_id" {
+                guard let id = value as? String, id.utf8.count <= 256 else { continue }
+            }
+            if group == "envelope" && key == "cwd" {
+                guard let cwd = value as? String, cwd.utf8.count <= 1024 else { continue }
+            }
             if group == "activity" && key == "kind"
                 && !["retry", "rate_limit", "compaction", "error", "session_reset"].contains(value as? String ?? "") { continue }
             if group == "coucou_monitor" && key == "outcome" {

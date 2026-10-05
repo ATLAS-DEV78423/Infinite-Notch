@@ -428,7 +428,14 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             let copies = handle.state::<DropCopies>().inner().clone();
-            tauri::async_runtime::spawn_blocking(move || { let _ = copies.startup(); });
+            tauri::async_runtime::spawn_blocking(move || {
+                // Best-effort abandoned-copy cleanup. Its failure must be visible:
+                // otherwise a planted entry or a missing /proc silently disables
+                // file preparation for the whole session with no diagnostic.
+                if let Err(error) = copies.startup() {
+                    log::line(format!("Abandoned-copy cleanup unavailable: {error}"));
+                }
+            });
             tray::build(&handle)?;
             // Before the island: see create_settings_window.
             create_settings_window(&handle);

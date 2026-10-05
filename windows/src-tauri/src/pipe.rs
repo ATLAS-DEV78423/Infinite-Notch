@@ -212,7 +212,7 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
     }
 
     if event != "PermissionRequest" {
-        log::line(format!("hook {event}"));
+        log::line(format!("hook {}", safe_event_name(&event)));
         let _ = app.emit_to(WINDOW_LABEL, "hook", payload);
         pipe.finish();
         return;
@@ -246,6 +246,16 @@ fn is_private_event(payload: &Value) -> bool {
         || payload.get("coucou_monitor").is_some()
 }
 
+/// `hook_event_name` is agent-authored. A packet can opt out of the private
+/// filter by declaring another agent, so this value must never be logged or
+/// rendered unbounded: it is the only agent-controlled text that persists.
+fn safe_event_name(event: &str) -> &str {
+    let plain = !event.is_empty()
+        && event.len() <= 48
+        && event.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+    if plain { event } else { "?" }
+}
+
 // Direct IPC clients need the same allowlist as coucou-hook. This is not full
 // monitor validation: bounds, enums and preview scrubbing belong to the consumer.
 fn retain_private_fields(value: &mut Value, group: &str) {
@@ -275,6 +285,10 @@ fn retain_private_fields(value: &mut Value, group: &str) {
         match (group, key.as_str()) {
             ("envelope", "tool_name") => return tool_event && item.as_str().map(|label|
                 !label.is_empty() && label.len() <= 256 && label.chars().all(private_tool_label_char)).unwrap_or(false),
+            // Bounds the consumer already applies on Windows, but macOS has no
+            // bounded consumer today, so the transport must reject outright.
+            ("envelope", "session_id") => return item.as_str().is_some_and(|id| id.len() <= 256),
+            ("envelope", "cwd") => return item.as_str().is_some_and(|cwd| cwd.len() <= 1024),
             ("approvals", "reason") => return matches!(item.as_str(), Some("permission_required" | "policy" | "unknown")),
             ("activity", "kind") => return matches!(item.as_str(), Some("retry" | "rate_limit" | "compaction" | "error" | "session_reset")),
             ("coucou_monitor", "outcome") => return outcome_valid,
