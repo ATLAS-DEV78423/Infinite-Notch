@@ -433,7 +433,7 @@ private final class PreparationStorage: @unchecked Sendable {
     func prepareFolder(source: URL, operationID: UUID, control: PreparationCancellation) async throws -> PreparedFile {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
-                do { continuation.resume(returning: try self.copyFolder(source, id: operationID, control: control)) }
+                do { continuation.resume(returning: try self.copyFolder(source: source, id: operationID, control: control)) }
                 catch { continuation.resume(throwing: (error as? FilePreparationError) ?? FilePreparationError.storage) }
             }
         }
@@ -444,7 +444,7 @@ private final class PreparationStorage: @unchecked Sendable {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 do {
-                    continuation.resume(returning: try self.copyText(bytes, name: name, id: operationID, control: control))
+                    continuation.resume(returning: try self.copyText(bytes: bytes, name: name, id: operationID, control: control))
                 }
                 catch { continuation.resume(throwing: (error as? FilePreparationError) ?? FilePreparationError.storage) }
             }
@@ -857,7 +857,7 @@ private enum NativePath {
     /// directory(_:) already opens every component with O_DIRECTORY|O_NOFOLLOW, so a
     /// symlinked leaf or ancestor is refused here rather than followed.
     static func openDirectory(_ url: URL) throws -> NativeFD {
-        try directory(try components(url))
+        try directory(try components(url)[...])
     }
     /// A walked or supplied name is only ever one component: it cannot be a path, so
     /// nothing a folder contains can escape the owned item root or rebuild a namespace.

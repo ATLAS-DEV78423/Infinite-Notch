@@ -1,10 +1,11 @@
 import Foundation
 import Darwin
+import MachO
 
 /// One system-wide CPU tick snapshot.
 ///
 /// AGGREGATE ONLY. Every value in this file comes from a *host* counter, never from a task:
-/// the only reachable Mach calls are `host_statistics64` and `host_processor_info`, and
+/// the only Mach call is `host_statistics64`, and
 /// `task_info` / `proc_pidinfo` / any per-process API are deliberately not called anywhere
 /// here. There is no process or application inventory, and nothing here can produce one.
 struct CPUTicks: Sendable, Equatable {
@@ -26,8 +27,6 @@ struct CPUSample: Sendable, Equatable {
     enum Source: Sendable, Equatable {
         /// `host_statistics64(host_self(), HOST_CPU_LOAD_INFO, ...)`
         case aggregate
-        /// `host_processor_info(host_self(), PROCESSOR_CPU_LOAD_INFO, ...)` documented fallback.
-        case perProcessorFallback
     }
 
     /// Busy share of the delta, clamped to 0...100.
@@ -82,8 +81,6 @@ actor CPUMonitor {
     private var previous: CPUTicks?
     private var lastSample: ContinuousClock.Instant?
     /// Consecutive aggregate readings pinned to a constant 0 or 100.
-    private var degenerateRun = 0
-    private var usesProcessorFallback = false
 
     init() {}
 
@@ -110,8 +107,6 @@ actor CPUMonitor {
     private func reset() {
         previous = nil
         lastSample = nil
-        degenerateRun = 0
-        usesProcessorFallback = false
     }
 
     /// One throttled aggregate read. `now` is injected so the throttle is testable without sleeping.
@@ -127,19 +122,10 @@ actor CPUMonitor {
             return nil
         }
 
-        let aggregate = Self.loadPercentage(previous: previous, current: aggregateTicks)
-        // A constant 0 or 100 is what Apple's own fallbacks exist for: after two of them, ask the
-        // per-CPU counter instead of trusting the aggregate path.
-        degenerateRun = (aggregate.map { $0 > 0 && $0 < 100 } ?? false) ? 0 : degenerateRun + 1
-        if degenerateRun >= 2 { usesProcessorFallback = true }
-
-        if usesProcessorFallback, let fallbackTicks = readProcessorTicks(),
-           let percent = Self.loadPercentage(previous: previous, current: fallbackTicks) {
-            self.previous = fallbackTicks
-            lastSkip = nil
-            return CPUSample(percent: percent, interval: interval, source: .perProcessorFallback)
+        guard let aggregate = Self.loadPercentage(previous: previous, current: aggregateTicks) else {
+            lastSkip = .implausibleDelta
+            return nil
         }
-        guard let aggregate else { lastSkip = .implausibleDelta; return nil }
         self.previous = aggregateTicks
         lastSkip = nil
         return CPUSample(percent: aggregate, interval: interval, source: .aggregate)
@@ -153,12 +139,17 @@ actor CPUMonitor {
     ///    snapshot) has no comparable baseline;
     ///  * a delta of zero total ticks means no elapsed CPU time was observed at all.
     static func loadPercentage(previous: CPUTicks, current: CPUTicks) -> Double? {
-        guard current.user >= previous.user, current.system >= previous.system,
-              current.idle >= previous.idle, current.nice >= previous.nice else { return nil }
-        let busy = (current.user - previous.user) + (current.system - previous.system) + (current.nice - previous.nice)
-        let total = busy + (current.idle - previous.idle)
+        // Broken into locals: the one-expression form exceeds the type-checker's budget.
+        let user = current.user - previous.user
+        let system = current.system - previous.system
+        let idle = current.idle - previous.idle
+        let nice = current.nice - previous.nice
+        guard user >= 0, system >= 0, idle >= 0, nice >= 0 else { return nil } // Counter reset.
+        let busy = user + system + nice
+        let total = busy + idle
         guard total > 0 else { return nil }
-        return clamp(Double(busy) / Double(total) * 100)
+        let ratio = Double(busy) / Double(total)
+        return clamp(ratio * 100)
     }
 
     /// Single clamp point for every published percentage.
@@ -198,52 +189,4 @@ actor CPUMonitor {
         return CPUTicks(user: UInt64(ticks.0), system: UInt64(ticks.1), idle: UInt64(ticks.2), nice: UInt64(ticks.3))
     }
 
-    /// <mach/host_info.h>: the documented fallback when the aggregate path reads a constant 0 or
-    /// 100. Still aggregate-only — one host-wide counter per CPU, never a per-process listing.
-    ///
-    /// The return value is an array of `cpuCount` pointers, each into one CPU's block of
-    /// `PROCESSOR_CPU_LOAD_INFO_COUNT` (`CPU_STATE_MAX`) `integer_t` in the documented
-    /// USER / SYSTEM / IDLE / NICE order — the same aggregate, resolved per CPU.
-    ///
-    /// The aggregate blocks are still host-wide, never per-process.
-    private func readProcessorTicks() -> CPUTicks? {
-        guard let port = acquireHostPort() else { return nil }
-        var list: processor_array_t?
-        var hostInfo: UnsafeMutablePointer<integer_t>?
-        // host_info_count is in/out: the request asks for CPU_STATE_MAX counters per CPU, and the
-        // answer reports how many it actually wrote.
-        var perCPUCount = mach_msg_type_number_t(CPU_STATE_MAX)
-        var cpuCount = mach_msg_type_number_t(0)
-        let result = withUnsafeMutablePointer(to: &hostInfo) { hostInfoPointer in
-            withUnsafeMutablePointer(to: &list) { listPointer in
-                host_processor_info(port, PROCESSOR_CPU_LOAD_INFO, hostInfoPointer, &perCPUCount, listPointer, &cpuCount)
-            }
-        }
-        guard result == KERN_SUCCESS, let list, cpuCount > 0, Int(perCPUCount) >= Int(CPU_STATE_MAX) else { return nil }
-        let stride = Int(perCPUCount)
-        defer {
-            // One kernel allocation: cpuCount pointers followed by cpuCount counter blocks.
-            // ponytail: page-rounded in one go rather than byte-exact; a shortfall only costs a
-            // still-mapped page on this rarely-taken fallback path.
-            let page = getpagesize()
-            let bytes = Int(cpuCount) * (MemoryLayout<UnsafeRawPointer>.stride + stride * MemoryLayout<integer_t>.stride)
-            _ = vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: list)), vm_size_t((bytes + page - 1) / page * page))
-        }
-        // The returned pointer addresses an array of `cpuCount` per-CPU blocks. Each slot is followed
-        // in memory by the next, but read them through the pointers themselves: the array is
-        // the documented contract, contiguity is not.
-        let blocks = UnsafeRawPointer(list).assumingMemoryBound(to: UnsafeRawPointer.self)
-        var ticks = CPUTicks.zero
-        for cpu in 0..<Int(cpuCount) {
-            let block = blocks[cpu].assumingMemoryBound(to: integer_t.self)
-            for state in 0..<stride {
-                let value = UInt64(UInt32(bitPattern: block[state]))
-                if state == Int(CPU_STATE_USER) { ticks.user += value }
-                else if state == Int(CPU_STATE_SYSTEM) { ticks.system += value }
-                else if state == Int(CPU_STATE_IDLE) { ticks.idle += value }
-                else if state == Int(CPU_STATE_NICE) { ticks.nice += value }
-            }
-        }
-        return ticks
-    }
 }

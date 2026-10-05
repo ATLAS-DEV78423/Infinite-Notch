@@ -191,8 +191,7 @@ enum CPUMonitorTests {
         testDiagnostic("INFO warm_up_skip=\(String(describing: warmSkip)) warm_up_value=\(String(describing: first))")
         testDiagnostic("INFO second_value=\(String(describing: second)) host_reads=\(reads)")
         if let second {
-            testDiagnostic("INFO source=\(second.source == .aggregate ? "aggregate" : "perProcessorFallback") "
-                         + "percent=\(second.percent) enforced_interval=\(second.interval)")
+            testDiagnostic("INFO percent=\(second.percent) enforced_interval=\(second.interval)")
         }
         // Asserted unconditionally: whatever the machine answers, a sample can never be nil-valued
         // out of range, and can never report a throttle interval faster than 1 Hz.
