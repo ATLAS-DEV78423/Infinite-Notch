@@ -62,7 +62,10 @@ struct CurrentDropPreparation {
     }
 }
 
-enum FilePreparationCheckpoint: Equatable, Sendable { case chunk(Int), beforePublish }
+enum FilePreparationCheckpoint: Equatable, Sendable {
+    case afterSourceFstat, afterRootRevalidate, afterOperationCreate, afterPartialCreate
+    case chunk(Int), beforePublish, afterPublish
+}
 
 actor FilePreparation {
     private let storage: PreparationStorage
@@ -99,6 +102,7 @@ actor FilePreparation {
         }
         guard !admissionClosed, tasks.count + retired.count < 4096 else { throw FilePreparationError.capacity }
         guard !cleanupFailed else { throw FilePreparationError.storage }
+        // ponytail: legacy one-file ceiling; use a bounded shelf queue when multi-item preparation is approved.
         guard active == nil else {
             retired.insert(operationID)
             throw FilePreparationError.busy
@@ -234,12 +238,15 @@ private final class PreparationStorage: @unchecked Sendable {
         let input = try NativePath.openFile(source)
         let original = try input.info()
         guard NativePath.isRegular(original), original.st_size >= 0 else { throw FilePreparationError.invalidSource }
+        checkpoint?(.afterSourceFstat)
         let name = try NativePath.components(source).last!
         if root == nil { root = try OwnedDirectory.create(at: requestedRoot ?? nativeRoot()) }
         guard let root else { throw FilePreparationError.storage }
         try root.revalidate()
+        checkpoint?(.afterRootRevalidate)
         let directory = try OwnedDirectory.create(at: root.url.appendingPathComponent(id.uuidString), parent: root.fd)
         operations[id] = directory
+        checkpoint?(.afterOperationCreate)
         let partialName = ".partial-\(UUID().uuidString)"
         let raw = openat(directory.fd.raw, partialName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
         guard raw >= 0 else { throw NativePath.failure() }
@@ -247,6 +254,7 @@ private final class PreparationStorage: @unchecked Sendable {
         let partialIdentity = try partial.info()
         guard NativePath.isRegular(partialIdentity) else { throw FilePreparationError.storage }
         directory.files[partialName] = partialIdentity
+        checkpoint?(.afterPartialCreate)
         var buffer = [UInt8](repeating: 0, count: 65_536)
         var total: UInt64 = 0
         var chunks = 0
@@ -293,8 +301,22 @@ private final class PreparationStorage: @unchecked Sendable {
             directory.files[name] = partialIdentity
         }
         guard fsync(directory.fd.raw) == 0 else { throw FilePreparationError.storage }
+        let readyURL = directory.url.appendingPathComponent(name)
+        let committedIdentity = try partial.info()
+        checkpoint?(.afterPublish)
         try control.check()
-        return PreparedFile(operationID: id, url: directory.url.appendingPathComponent(name), name: name, size: total)
+        // Publication is not delivery: re-open the actual returned namespace without following aliases.
+        // Cleanup authority stays with the original handles even when this path is no longer usable.
+        try root.revalidate()
+        try directory.revalidate()
+        let delivered = try NativePath.openFile(readyURL)
+        guard NativePath.sameIdentity(partialIdentity, committedIdentity),
+              committedIdentity.st_size == original.st_size,
+              NativePath.unchanged(committedIdentity, try partial.info()),
+              NativePath.unchanged(committedIdentity, try delivered.info()),
+              directory.matches(name, committedIdentity) else { throw FilePreparationError.invalidSource }
+        try control.check()
+        return PreparedFile(operationID: id, url: readyURL, name: name, size: total)
     }
 
     private func removeOperation(_ id: UUID) -> Bool {

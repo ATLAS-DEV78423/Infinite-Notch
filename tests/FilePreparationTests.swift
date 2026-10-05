@@ -4,9 +4,11 @@ import Foundation
 @main
 enum FilePreparationTests {
     static func main() async {
+        testDiagnostic("RUN pending_after_ten_seconds_has_no_check_or_choose")
         pending_after_ten_seconds_has_no_check_or_choose()
-        print("  ✓ pending_after_ten_seconds_has_no_check_or_choose")
+        testDiagnostic("PASS pending_after_ten_seconds_has_no_check_or_choose")
         let cases: [(String, @MainActor () async throws -> Void)] = [
+            ("basic_actor_copy_is_ready", basic_actor_copy_is_ready),
             ("concurrent_same_name_preserves_bytes", concurrent_same_name_preserves_bytes),
             ("thousand_duplicates_do_not_overwrite", thousand_duplicates_do_not_overwrite),
             ("cancel_removes_only_owned_partial", cancel_removes_only_owned_partial),
@@ -14,6 +16,7 @@ enum FilePreparationTests {
             ("unknown_ids_and_operation_collisions_preserve_foreign_data", unknown_ids_and_operation_collisions_preserve_foreign_data),
             ("source_root_and_ancestor_symlinks_rejected", source_root_and_ancestor_symlinks_rejected),
             ("source_and_root_swaps_before_commit_are_rejected", source_and_root_swaps_before_commit_are_rejected),
+            ("ancestor_swap_after_publish_refuses_ready_receipt", ancestor_swap_after_publish_refuses_ready_receipt),
             ("mutation_does_not_publish_ready", mutation_does_not_publish_ready),
             ("invalid_reused_and_cancel_before_admit_refused", invalid_reused_and_cancel_before_admit_refused),
             ("capacity_fails_closed_without_eviction", capacity_fails_closed_without_eviction),
@@ -28,9 +31,14 @@ enum FilePreparationTests {
             ("reduced_motion_keeps_actual_readiness", reduced_motion_keeps_actual_readiness),
         ]
         for (name, run) in cases {
+            testDiagnostic("RUN \(name)")
             do { try await run() }
+            catch let error as FilePreparationError {
+                testDiagnostic("checkpoint=case_execution error=\(preparationErrorCase(error))")
+                preconditionFailure("\(name): synthetic file preparation check failed")
+            }
             catch { preconditionFailure("\(name): synthetic file preparation check failed") }
-            print("  ✓ \(name)")
+            testDiagnostic("PASS \(name)")
         }
         print("File preparation: \(cases.count + 1) cases passed")
     }
@@ -47,14 +55,33 @@ enum FilePreparationTests {
                      + "got check=\(frame.check), chooseAlpha=\(frame.chooseAlpha), progress=\(frame.progress)")
     }
 
+    static func basic_actor_copy_is_ready() async throws {
+        let f = try Fixture()
+        let source = try f.source("basic.bin", Data([1, 2, 3]))
+        let copies = FilePreparation(root: f.root("basic-copies"), checkpoint: { stage in
+            switch stage {
+            case .afterSourceFstat: testDiagnostic("SETUP after_source_fstat")
+            case .afterRootRevalidate: testDiagnostic("SETUP after_root_revalidate")
+            case .afterOperationCreate: testDiagnostic("SETUP after_operation_create")
+            case .afterPartialCreate: testDiagnostic("SETUP after_partial_create")
+            case .chunk(_), .beforePublish, .afterPublish: break
+            }
+        })
+        let id = UUID()
+        let receipt = try await copies.prepare(source: source, operationID: id)
+        precondition(receipt.operationID == id && receipt.size == 3 && receipt.name == "basic.bin")
+        try bytes(source, Data([1, 2, 3])); try bytes(receipt.url, Data([1, 2, 3]))
+        await copies.shutdown()
+    }
+
     static func concurrent_same_name_preserves_bytes() async throws {
         let f = try Fixture()
         let a = try f.source("a/same.bin", Data([1, 2, 3]))
         let b = try f.source("b/same.bin", Data([4, 5, 6]))
-        let gate = Barrier()
+        let gate = Barrier(.chunk(1))
         let one = FilePreparation(root: f.root("one"), checkpoint: { if $0 == .chunk(1) { gate.pause() } })
         let two = FilePreparation(root: f.root("two"))
-        let first = Task { defer { gate.finished() }; return try await one.prepare(source: a, operationID: UUID()) }
+        let first = Task { try await gate.prepare(one, source: a, operationID: UUID()) }
         await gate.waitUntilPaused()
         let second = try await two.prepare(source: b, operationID: UUID())
         gate.release()
@@ -87,11 +114,11 @@ enum FilePreparationTests {
         let data = Data(repeating: 7, count: 131_073)
         let source = try f.source("large.bin", data)
         let foreign = try f.source("foreign.bin", Data([22]))
-        let gate = Barrier()
+        let gate = Barrier(.chunk(1))
         let root = f.root("copies")
         let copies = FilePreparation(root: root, checkpoint: { if $0 == .chunk(1) { gate.pause() } })
         let id = UUID()
-        let task = Task { defer { gate.finished() }; return try await copies.prepare(source: source, operationID: id) }
+        let task = Task { try await gate.prepare(copies, source: source, operationID: id) }
         await gate.waitUntilPaused()
         let owned = root.appendingPathComponent(id.uuidString)
         precondition(!FileManager.default.fileExists(atPath: owned.appendingPathComponent("large.bin").path))
@@ -114,9 +141,9 @@ enum FilePreparationTests {
         let root = f.root("copies")
         let source = try f.source("same.bin", Data([1]))
         let id = UUID()
-        let gate = Barrier()
+        let gate = Barrier(.beforePublish)
         let copies = FilePreparation(root: root, checkpoint: { if $0 == .beforePublish { gate.pause() } })
-        let task = Task { defer { gate.finished() }; return try await copies.prepare(source: source, operationID: id) }
+        let task = Task { try await gate.prepare(copies, source: source, operationID: id) }
         await gate.waitUntilPaused()
         let destination = root.appendingPathComponent(id.uuidString).appendingPathComponent("same.bin")
         try Data([99]).write(to: destination)
@@ -173,9 +200,9 @@ enum FilePreparationTests {
     static func source_and_root_swaps_before_commit_are_rejected() async throws {
         let f = try Fixture()
         let source = try f.source("source-parent/file.bin", Data([5]))
-        let gate = Barrier()
+        let gate = Barrier(.beforePublish)
         let copies = FilePreparation(root: f.root("copies"), checkpoint: { if $0 == .beforePublish { gate.pause() } })
-        let task = Task { defer { gate.finished() }; return try await copies.prepare(source: source, operationID: UUID()) }
+        let task = Task { try await gate.prepare(copies, source: source, operationID: UUID()) }
         await gate.waitUntilPaused()
         let originalParent = source.deletingLastPathComponent()
         let movedParent = f.root("moved-source")
@@ -190,11 +217,11 @@ enum FilePreparationTests {
         let parent = f.root("root-parent")
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
         let other = try f.source("other/sentinel.bin", Data([77]))
-        let rootGate = Barrier()
+        let rootGate = Barrier(.beforePublish)
         let rooted = FilePreparation(root: parent.appendingPathComponent("owned"), checkpoint: {
             if $0 == .beforePublish { rootGate.pause() }
         })
-        let rootTask = Task { defer { rootGate.finished() }; return try await rooted.prepare(source: safeSource, operationID: UUID()) }
+        let rootTask = Task { try await rootGate.prepare(rooted, source: safeSource, operationID: UUID()) }
         await rootGate.waitUntilPaused()
         let moved = f.root("moved-root-parent")
         try FileManager.default.moveItem(at: parent, to: moved)
@@ -208,11 +235,11 @@ enum FilePreparationTests {
     static func mutation_does_not_publish_ready() async throws {
         let f = try Fixture()
         let source = try f.source("mutable.bin", Data(repeating: 1, count: 65_537))
-        let gate = Barrier()
+        let gate = Barrier(.beforePublish)
         let root = f.root("copies")
         let copies = FilePreparation(root: root, checkpoint: { if $0 == .beforePublish { gate.pause() } })
         let id = UUID()
-        let task = Task { defer { gate.finished() }; return try await copies.prepare(source: source, operationID: id) }
+        let task = Task { try await gate.prepare(copies, source: source, operationID: id) }
         await gate.waitUntilPaused()
         try Data([2]).write(to: source)
         gate.release()
@@ -222,12 +249,9 @@ enum FilePreparationTests {
         await copies.shutdown()
 
         let timestampSource = try f.source("timestamp.bin", Data([2]))
-        let stampGate = Barrier()
+        let stampGate = Barrier(.beforePublish)
         let stamped = FilePreparation(root: f.root("stamped"), checkpoint: { if $0 == .beforePublish { stampGate.pause() } })
-        let timestampTask = Task {
-            defer { stampGate.finished() }
-            return try await stamped.prepare(source: timestampSource, operationID: UUID())
-        }
+        let timestampTask = Task { try await stampGate.prepare(stamped, source: timestampSource, operationID: UUID()) }
         await stampGate.waitUntilPaused()
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)],
                                              ofItemAtPath: timestampSource.path)
@@ -235,6 +259,54 @@ enum FilePreparationTests {
         await refuses { try await timestampTask.value }
         try bytes(timestampSource, Data([2]))
         await stamped.shutdown()
+    }
+
+    static func ancestor_swap_after_publish_refuses_ready_receipt() async throws {
+        let f = try Fixture()
+        let sourceBytes = Data([1, 2, 3])
+        let foreignBytes = Data([7, 8, 9])
+        let source = try f.source("source.bin", sourceBytes)
+        let parent = f.root("copy-parent")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+        let root = parent.appendingPathComponent("owned")
+        let id = UUID()
+        let gate = Barrier(.afterPublish)
+        let copies = FilePreparation(root: root, checkpoint: { if $0 == .afterPublish { gate.pause() } })
+        var owner = CurrentDropPreparation()
+        _ = owner.begin(operationID: id)
+        let task = Task { try await gate.prepare(copies, source: source, operationID: id) }
+        await gate.waitUntilPaused()
+        defer { gate.release() }
+        let receiptPath = root.appendingPathComponent(id.uuidString).appendingPathComponent("source.bin")
+        try bytes(receiptPath, sourceBytes) // The actual worker has published, but has not delivered a receipt.
+        precondition(owner.isPreparing && owner.readyFile == nil)
+        let foreign = try f.source("foreign-parent/owned/\(id.uuidString)/source.bin", foreignBytes)
+        let moved = f.root("moved-copy-parent")
+        try FileManager.default.moveItem(at: parent, to: moved)
+        try FileManager.default.createSymbolicLink(at: parent, withDestinationURL: f.root("foreign-parent"))
+        try bytes(receiptPath, foreignBytes) // An unchecked returned URL now resolves through the substituted namespace.
+        gate.release()
+
+        var received = false
+        do {
+            let receipt = try await task.value
+            received = true
+            _ = owner.complete(receipt)
+        } catch is FilePreparationError {
+            precondition(owner.fail(operationID: id))
+        } catch { preconditionFailure("post-publication refusal must remain a controlled error") }
+        precondition(!received && owner.readyFile == nil && owner.disposition == .failed,
+                     "ancestor_swap_after_publish_refuses_ready_receipt: a substituted delivered path must never become ready")
+        let originalOperation = moved.appendingPathComponent("owned").appendingPathComponent(id.uuidString)
+        precondition(!FileManager.default.fileExists(atPath: originalOperation.path),
+                     "failed delivery removes only the operation behind the original retained handles")
+        await copies.cancel(operationID: id)
+        try bytes(foreign, foreignBytes); try bytes(source, sourceBytes)
+        await copies.shutdown()
+        precondition(!FileManager.default.fileExists(atPath: moved.appendingPathComponent("owned").path))
+        let active = await copies.activeCount, owned = await copies.ownedCount, failedCleanup = await copies.cleanupFailed
+        precondition(active == 0 && owned == 0 && !failedCleanup)
+        try bytes(foreign, foreignBytes); try bytes(source, sourceBytes)
     }
 
     static func invalid_reused_and_cancel_before_admit_refused() async throws {
@@ -292,12 +364,12 @@ enum FilePreparationTests {
     static func slow_copy_has_no_ready_context() async throws {
         let f = try Fixture()
         let source = try f.source("slow.bin", Data(repeating: 2, count: 65_537))
-        let gate = Barrier()
+        let gate = Barrier(.chunk(1))
         let copies = FilePreparation(root: f.root("copies"), checkpoint: { if $0 == .chunk(1) { gate.pause() } })
         let id = UUID()
         var owner = CurrentDropPreparation()
         _ = owner.begin(operationID: id)
-        let task = Task { defer { gate.finished() }; return try await copies.prepare(source: source, operationID: id) }
+        let task = Task { try await gate.prepare(copies, source: source, operationID: id) }
         await gate.waitUntilPaused()
         precondition(owner.isPreparing && owner.readyFile == nil)
         await refuses { try await copies.prepare(source: source, operationID: UUID()) }
@@ -332,10 +404,10 @@ enum FilePreparationTests {
     static func cancel_and_shutdown_clear_tasks() async throws {
         let f = try Fixture()
         let source = try f.source("slow.bin", Data(repeating: 2, count: 65_537))
-        let gate = Barrier()
+        let gate = Barrier(.chunk(1))
         let root = f.root("copies")
         let copies = FilePreparation(root: root, checkpoint: { if $0 == .chunk(1) { gate.pause() } })
-        let task = Task { defer { gate.finished() }; return try await copies.prepare(source: source, operationID: UUID()) }
+        let task = Task { try await gate.prepare(copies, source: source, operationID: UUID()) }
         await gate.waitUntilPaused()
         let shutdown = Task { await copies.shutdown() }
         while !(await copies.isShutDown) { await Task.yield() }
@@ -471,11 +543,33 @@ private struct Fixture {
 
 // Blocks only the actual native copy worker; the MainActor awaits a signal without sleeping.
 private final class Barrier: @unchecked Sendable {
+    private let target: FilePreparationCheckpoint
     private let lock = NSLock()
     private let proceed = DispatchSemaphore(value: 0)
     private var entered = false
     private var didPause = false
     private var waiter: CheckedContinuation<Void, Never>?
+    init(_ target: FilePreparationCheckpoint) { self.target = target }
+    func prepare(_ copies: FilePreparation, source: URL, operationID: UUID) async throws -> PreparedFile {
+        defer { finished() }
+        do { return try await copies.prepare(source: source, operationID: operationID) }
+        catch let error as FilePreparationError {
+            // Report before finished() wakes the waiter: an early failure must not masquerade as a pause.
+            testDiagnostic("checkpoint=\(checkpointName) reached=\(wasPaused) error=\(preparationErrorCase(error))")
+            throw error
+        }
+    }
+    private var checkpointName: String {
+        switch target {
+        case .afterSourceFstat: return "after_source_fstat"
+        case .afterRootRevalidate: return "after_root_revalidate"
+        case .afterOperationCreate: return "after_operation_create"
+        case .afterPartialCreate: return "after_partial_create"
+        case .chunk(let number): return "chunk_\(number)"
+        case .beforePublish: return "before_publish"
+        case .afterPublish: return "after_publish"
+        }
+    }
     func pause() {
         signal(paused: true)
         proceed.wait()
@@ -500,4 +594,22 @@ private final class Barrier: @unchecked Sendable {
     }
     private var wasPaused: Bool { lock.lock(); defer { lock.unlock() }; return didPause }
     func release() { proceed.signal() }
+}
+
+// Direct stderr writes are unbuffered, so the next native trap cannot hide the current fixed case name.
+private func testDiagnostic(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+
+private func preparationErrorCase(_ error: FilePreparationError) -> String {
+    switch error {
+    case .invalidSource: return "invalidSource"
+    case .denied: return "denied"
+    case .storage: return "storage"
+    case .cancelled: return "cancelled"
+    case .invalidOperation: return "invalidOperation"
+    case .duplicateOperation: return "duplicateOperation"
+    case .busy: return "busy"
+    case .capacity: return "capacity"
+    }
 }
