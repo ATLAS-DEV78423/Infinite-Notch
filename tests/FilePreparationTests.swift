@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 @MainActor
 @main
@@ -55,7 +56,73 @@ enum FilePreparationTests {
                      + "got check=\(frame.check), chooseAlpha=\(frame.chooseAlpha), progress=\(frame.progress)")
     }
 
+    static func trusted_bases_use_posix_canonical_paths() async throws {
+        let count = confstr(Int32(_CS_DARWIN_USER_TEMP_DIR), nil, 0)
+        guard count > 1, count <= 4096 else { throw FilePreparationError.storage }
+        var path = [CChar](repeating: 0, count: count)
+        guard confstr(Int32(_CS_DARWIN_USER_TEMP_DIR), &path, count) == count else { throw FilePreparationError.storage }
+        let osBase = URL(fileURLWithPath: try posixCanonicalPath(String(cString: path)), isDirectory: true)
+        precondition(directoryAncestorsAreReal(osBase.path), "the POSIX OS base must contain no symbolic-link ancestors")
+
+        // Characterize Apple's documented /private shortening without reading or modifying user files.
+        var canonicalComparison = osBase
+        var logicalComparison = URL(fileURLWithPath: String(cString: path), isDirectory: true).resolvingSymlinksInPath()
+        if logicalComparison.path == canonicalComparison.path {
+            // Some OS-selected bases have no shortened alias. /private/tmp is the fixed,
+            // read-only system alias documented by Foundation's behavior.
+            canonicalComparison = URL(fileURLWithPath: try posixCanonicalPath("/private/tmp"), isDirectory: true)
+            logicalComparison = URL(fileURLWithPath: "/private/tmp", isDirectory: true).resolvingSymlinksInPath()
+        }
+        precondition(logicalComparison.path != canonicalComparison.path && !directoryAncestorsAreReal(logicalComparison.path),
+                     "Foundation's shorter system alias must not be mistaken for a no-follow canonical base")
+        precondition(directoryAncestorsAreReal(canonicalComparison.path))
+
+        let f = try Fixture()
+        precondition(directoryAncestorsAreReal(f.base.path), "the runner-owned fixture must remain POSIX canonical")
+        let expected = Data([1, 2, 3])
+        let source = try f.source("native-default.bin", expected)
+        let copies = FilePreparation() // Exercises the actual trusted Darwin root selection, not root injection.
+        let id = UUID()
+        let receipt: PreparedFile
+        do {
+            receipt = try await copies.prepare(source: source, operationID: id)
+        } catch {
+            await copies.shutdown()
+            throw error
+        }
+        let ownedRoot = receipt.url.deletingLastPathComponent().deletingLastPathComponent()
+        let receiptMetadataValid = receipt.operationID == id && receipt.size == 3
+        let rootLocationValid = ownedRoot.deletingLastPathComponent().path == osBase.path
+        let receiptPathIsReal = directoryAncestorsAreReal(receipt.url.deletingLastPathComponent().path)
+        let sourceData: Data
+        let receiptData: Data
+        do {
+            sourceData = try Data(contentsOf: source)
+            receiptData = try Data(contentsOf: receipt.url)
+        } catch {
+            await copies.shutdown()
+            throw error
+        }
+        await copies.shutdown()
+        let active = await copies.activeCount, owned = await copies.ownedCount, failedCleanup = await copies.cleanupFailed
+        let rootRemoved = !FileManager.default.fileExists(atPath: ownedRoot.path)
+        precondition(receiptMetadataValid)
+        precondition(rootLocationValid,
+                     "the native private copy root must stay under the true Darwin-selected base")
+        precondition(receiptPathIsReal)
+        precondition(sourceData == expected && receiptData == expected)
+        precondition(active == 0 && owned == 0 && !failedCleanup)
+        precondition(rootRemoved, "native shutdown must remove only its owned copy root")
+    }
+
     static func basic_actor_copy_is_ready() async throws {
+        testDiagnostic("RUN trusted_bases_use_posix_canonical_paths")
+        do { try await trusted_bases_use_posix_canonical_paths() }
+        catch let error as FilePreparationError {
+            testDiagnostic("checkpoint=trusted_base_setup error=\(preparationErrorCase(error))")
+            throw error
+        }
+        testDiagnostic("PASS trusted_bases_use_posix_canonical_paths")
         let f = try Fixture()
         let source = try f.source("basic.bin", Data([1, 2, 3]))
         let copies = FilePreparation(root: f.root("basic-copies"), checkpoint: { stage in
@@ -68,10 +135,26 @@ enum FilePreparationTests {
             }
         })
         let id = UUID()
-        let receipt = try await copies.prepare(source: source, operationID: id)
-        precondition(receipt.operationID == id && receipt.size == 3 && receipt.name == "basic.bin")
-        try bytes(source, Data([1, 2, 3])); try bytes(receipt.url, Data([1, 2, 3]))
+        let receipt: PreparedFile
+        do {
+            receipt = try await copies.prepare(source: source, operationID: id)
+        } catch {
+            await copies.shutdown()
+            throw error
+        }
+        let receiptMetadataValid = receipt.operationID == id && receipt.size == 3 && receipt.name == "basic.bin"
+        let sourceData: Data
+        let receiptData: Data
+        do {
+            sourceData = try Data(contentsOf: source)
+            receiptData = try Data(contentsOf: receipt.url)
+        } catch {
+            await copies.shutdown()
+            throw error
+        }
         await copies.shutdown()
+        precondition(receiptMetadataValid)
+        precondition(sourceData == Data([1, 2, 3]) && receiptData == Data([1, 2, 3]))
     }
 
     static func concurrent_same_name_preserves_bytes() async throws {
@@ -529,7 +612,7 @@ private struct Fixture {
             preconditionFailure("use the owned-root test runner")
         }
         // Only the runner-owned synthetic base is canonicalized, never a selected source.
-        base = URL(fileURLWithPath: path).resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        base = URL(fileURLWithPath: try posixCanonicalPath(path)).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: false)
     }
     func root(_ name: String) -> URL { base.appendingPathComponent(name) }
@@ -539,6 +622,27 @@ private struct Fixture {
         try data.write(to: url)
         return url
     }
+}
+
+private func posixCanonicalPath(_ path: String) throws -> String {
+    guard let resolved = path.withCString({ Darwin.realpath($0, nil) }) else {
+        throw FilePreparationError.storage
+    }
+    defer { Darwin.free(resolved) }
+    return String(cString: resolved)
+}
+
+// Metadata-only assertion for canonical trusted/test directories; never normalizes a selected URL.
+private func directoryAncestorsAreReal(_ path: String) -> Bool {
+    guard path.hasPrefix("/") else { return false }
+    var ancestor = ""
+    for component in path.split(separator: "/") {
+        ancestor += "/" + component
+        var info = stat()
+        guard Darwin.lstat(ancestor, &info) == 0,
+              UInt32(info.st_mode) & UInt32(S_IFMT) == UInt32(S_IFDIR) else { return false }
+    }
+    return true
 }
 
 // Blocks only the actual native copy worker; the MainActor awaits a signal without sleeping.

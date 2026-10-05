@@ -332,9 +332,15 @@ private final class PreparationStorage: @unchecked Sendable {
         guard count > 1, count <= 4096 else { throw FilePreparationError.storage }
         var path = [CChar](repeating: 0, count: count)
         guard confstr(Int32(_CS_DARWIN_USER_TEMP_DIR), &path, count) == count else { throw FilePreparationError.storage }
-        // Darwin can return the system /var alias. Canonicalize only this trusted OS base;
-        // selected sources and injected roots never pass through symlink resolution.
-        let base = URL(fileURLWithPath: String(cString: path), isDirectory: true).resolvingSymlinksInPath()
+        // Darwin can return the system /var alias. Canonicalize only this trusted OS base
+        // with POSIX realpath; Foundation's URL helper may strip /private instead.
+        let basePath: String? = path.withUnsafeBufferPointer { buffer in
+            guard let raw = buffer.baseAddress, let resolved = Darwin.realpath(raw, nil) else { return nil }
+            defer { Darwin.free(resolved) }
+            return String(cString: resolved)
+        }
+        guard let basePath else { throw FilePreparationError.storage }
+        let base = URL(fileURLWithPath: basePath, isDirectory: true)
         return base.appendingPathComponent("coucou-preparation-\(UUID().uuidString)", isDirectory: true)
     }
 }
