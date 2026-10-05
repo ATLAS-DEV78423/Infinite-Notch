@@ -132,7 +132,7 @@ enum FilePreparationTests {
             case .afterRootRevalidate: testDiagnostic("SETUP after_root_revalidate")
             case .afterOperationCreate: testDiagnostic("SETUP after_operation_create")
             case .afterPartialCreate: testDiagnostic("SETUP after_partial_create")
-            case .chunk(_), .beforePublish, .afterPublish: break
+            case .chunk(_), .beforePublish, .afterPublish, .beforeLeaseDelivery: break
             }
         })
         let id = UUID()
@@ -597,27 +597,38 @@ enum FilePreparationTests {
         try expected.write(to: source, options: .withoutOverwriting)
         let copies = FilePreparation(root: fixture.appendingPathComponent("copies"))
         let id = UUID()
+        let itemID = UUID()
+        var heldLease: UUID?
         let readyPathPresent: Bool
         let consumed: Data?
         let original: Data
         do {
             testDiagnostic("COPY future_lease_lifetime_prepare")
-            let receipt = try await copies.prepare(source: source, operationID: id)
+            let asset = try await copies.prepareShelf(source: source, itemID: itemID, operationID: id)
+            let lease = try await copies.acquire(assetID: asset.assetID, purpose: .drag)
+            heldLease = lease.leaseID
+            let receipt = lease.readyFile
             testDiagnostic("SETUP future_lease_lifetime_consumer_open")
             let consumer = try FileHandle(forReadingFrom: receipt.url)
             defer { try? consumer.close() }
-            // Future lease-lifetime regression: this is a real open consumer, not a registered native lease.
-            // Use today's real cancellation/disposal boundary until the shelf lease/remove API exists.
-            testDiagnostic("REMOVE future_lease_lifetime_native_cancel")
-            await copies.cancel(operationID: id)
+            // Hosted behavioral RED at e5ec070, run37314194104/job111776695186, exit133:
+            // legacy cancellation lost this pathname while the real consumer still read its bytes.
+            // The same observable is now asserted through actual registered native lease
+            // ownership. ShelfStorageTests.legacy_cancel_cannot_delete_leased_shelf_asset owns
+            // the equivalent lease case, so this case proves the preparation file's own
+            // cancel/remove contract rather than a descriptor-alone lifetime claim.
+            testDiagnostic("REMOVE future_lease_lifetime_native_remove")
+            await copies.remove(itemID: itemID)
             var info = stat()
             readyPathPresent = Darwin.lstat(receipt.url.path, &info) == 0
             consumed = try consumer.readToEnd() // Read the retained descriptor while its pathname may be gone.
             original = try Data(contentsOf: source)
         } catch {
+            if let heldLease { await copies.release(leaseID: heldLease) }
             await copies.shutdown()
             throw error
         }
+        if let heldLease { await copies.release(leaseID: heldLease) }
         await copies.shutdown() // Close the consumer and clean native ownership before any assertion trap.
         testDiagnostic("ASSERT future_lease_lifetime_original_untouched")
         precondition(original == expected, "future_lease_lifetime: the original bytes must remain untouched")
@@ -717,6 +728,7 @@ private final class Barrier: @unchecked Sendable {
         case .chunk(let number): return "chunk_\(number)"
         case .beforePublish: return "before_publish"
         case .afterPublish: return "after_publish"
+        case .beforeLeaseDelivery: return "before_lease_delivery"
         }
     }
     func pause() {

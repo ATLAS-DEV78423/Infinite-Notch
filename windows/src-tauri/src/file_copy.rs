@@ -62,6 +62,8 @@ struct Owned {
     name: String,
     preparing: bool,
     ready: bool,
+    ready_metadata: Option<std::fs::Metadata>,
+    leases: usize,
 }
 
 struct Operation {
@@ -115,7 +117,7 @@ pub fn reap_abandoned(root: &Path) -> Result<ReapOutcome, CopyError> {
 fn cleanup(operation: &Operation, id: &str) -> Result<(), CopyError> {
     let mut slot = operation.owned.lock().unwrap_or_else(|e| e.into_inner());
     let Some(owned) = slot.as_mut() else { return Ok(()); };
-    if owned.preparing { return Ok(()); } // The worker owns cleanup until its I/O ends.
+    if owned.preparing || owned.leases != 0 { return Ok(()); } // Workers and native consumers retain authority.
     if let Some(content) = &owned.content {
         native::remove_content(&owned.dir, if owned.ready { &owned.name } else { &owned.partial }, content).map_err(io_error)?;
         // Windows deletes a marked file only when its last owned handle closes.
@@ -131,16 +133,94 @@ pub fn discard(root: &Path, operation_id: &str) -> Result<(), CopyError> {
     validate_id(operation_id)?;
     let key = (absolute(root)?, operation_id.to_owned());
     let operation = registry().lock().unwrap().get(&key).cloned().ok_or(CopyError::InvalidOperation)?;
+    discard_operation(&operation, operation_id)
+}
+
+fn discard_operation(operation: &Operation, operation_id: &str) -> Result<(), CopyError> {
     {
         // Publish and revoke share this owner boundary. No filesystem deletion
         // can race a worker still using its partial handle.
         let _owner = operation.owned.lock().unwrap();
         operation.cancelled.store(true, Ordering::Release);
     }
-    cleanup(&operation, operation_id)
+    cleanup(operation, operation_id)
+}
+
+pub(crate) struct CopyOwner { operation: Arc<Operation>, root: PathBuf, id: String }
+
+impl CopyOwner {
+    pub(crate) fn retained(&self) -> bool { self.operation.owned.lock().unwrap().is_some() }
+    pub(crate) fn discard(&self) -> Result<(), CopyError> { discard_operation(&self.operation, &self.id) }
+
+    pub(crate) fn acquire(&self) -> Result<(CopiedFile, ReadyLease), CopyError> {
+        acquire_ready(&self.root, &self.id, self.operation.clone())
+    }
+}
+
+/// A read-only consumer inside the same owner as publication and disposal.
+/// Closing this handle precedes the last-lease cleanup attempt on Windows.
+pub(crate) struct ReadyLease {
+    reader: Option<File>,
+    operation: Arc<Operation>,
+    id: String,
+    released: bool,
+}
+
+impl Read for ReadyLease {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.as_mut().ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotConnected))?.read(bytes)
+    }
+}
+
+impl ReadyLease {
+    fn close(&mut self) -> Result<(), CopyError> {
+        if self.released { return Ok(()); }
+        self.reader = None;
+        {
+            let mut slot = self.operation.owned.lock().unwrap();
+            match slot.as_mut() {
+                // Cleanup already retired this operation: nothing is left to retain.
+                None => { self.released = true; return Ok(()); }
+                Some(owned) => { owned.leases = owned.leases.checked_sub(1).ok_or(CopyError::Storage)?; }
+            }
+            // Latch only once the count agrees, so a failed decrement is retried by Drop.
+            self.released = true;
+        }
+        if self.operation.cancelled.load(Ordering::Acquire) { cleanup(&self.operation, &self.id) } else { Ok(()) }
+    }
+
+    pub(crate) fn release(mut self) -> Result<(), CopyError> { self.close() }
+}
+
+impl Drop for ReadyLease {
+    fn drop(&mut self) { let _ = self.close(); } // A failed disposal stays in Owned for retry.
+}
+
+fn acquire_ready(root_path: &Path, id: &str, operation: Arc<Operation>) -> Result<(CopiedFile, ReadyLease), CopyError> {
+    let mut slot = operation.owned.lock().unwrap();
+    if operation.cancelled.load(Ordering::Acquire) { return Err(CopyError::Cancelled); }
+    let owned = slot.as_mut().filter(|owned| owned.ready && !owned.preparing).ok_or(CopyError::InvalidOperation)?;
+    native::verify_location(root_path, id, &owned.root, &owned.dir).map_err(io_error)?;
+    let reader = native::open_ready(&owned.dir, &owned.name, owned.content.as_ref().ok_or(CopyError::Storage)?).map_err(io_error)?;
+    let metadata = reader.metadata().map_err(io_error)?;
+    if !native::unchanged(owned.ready_metadata.as_ref().ok_or(CopyError::Storage)?, &metadata) { return Err(CopyError::InvalidSource); }
+    native::verify_location(root_path, id, &owned.root, &owned.dir).map_err(io_error)?;
+    // Refuse overflow without altering the owned file or its existing consumers.
+    owned.leases = owned.leases.checked_add(1).ok_or(CopyError::Storage)?;
+    let copy = CopiedFile { name: owned.name.clone(), path: root_path.join(id).join(&owned.name), size: metadata.len() };
+    drop(slot);
+    Ok((copy, ReadyLease { reader: Some(reader), operation, id: id.to_owned(), released: false }))
 }
 
 pub fn copy_into(source: &Path, root: &Path, operation_id: &str, cancelled: &AtomicBool) -> Result<CopiedFile, CopyError> {
+    copy(source, root, operation_id, cancelled, None)
+}
+
+pub(crate) fn copy_owned(source: &Path, root: &Path, operation_id: &str, cancelled: &AtomicBool, owner: &Mutex<Option<CopyOwner>>) -> Result<CopiedFile, CopyError> {
+    copy(source, root, operation_id, cancelled, Some(owner))
+}
+
+fn copy(source: &Path, root: &Path, operation_id: &str, cancelled: &AtomicBool, owner: Option<&Mutex<Option<CopyOwner>>>) -> Result<CopiedFile, CopyError> {
     validate_id(operation_id)?;
     if cancelled.load(Ordering::Acquire) { return Err(CopyError::Cancelled); }
     let root_path = absolute(root)?;
@@ -159,6 +239,9 @@ pub fn copy_into(source: &Path, root: &Path, operation_id: &str, cancelled: &Ato
         entries.insert(key, operation.clone());
         operation
     };
+    // Transfer actual admission authority before I/O, including on worker unwind.
+    // Duplicate registry entries never issue a token to a different owner.
+    if let Some(owner) = owner { *owner.lock().unwrap() = Some(CopyOwner { operation: operation.clone(), root: root_path.clone(), id: operation_id.to_owned() }); }
     let mut worker = WorkerCleanup { operation: operation.clone(), id: operation_id, complete: false };
     let result = (|| {
         if cancelled.load(Ordering::Acquire) || operation.cancelled.load(Ordering::Acquire) { return Err(CopyError::Cancelled); }
@@ -176,7 +259,7 @@ pub fn copy_into(source: &Path, root: &Path, operation_id: &str, cancelled: &Ato
         };
         let mut output = {
             let mut owner = operation.owned.lock().unwrap();
-            *owner = Some(Owned { root, dir, content: Some(content), marker: None, partial, name: name.clone(), preparing: true, ready: false });
+            *owner = Some(Owned { root, dir, content: Some(content), marker: None, partial, name: name.clone(), preparing: true, ready: false, ready_metadata: None, leases: 0 });
             let owned = owner.as_mut().unwrap();
             owned.marker = native::register_owner(&owned.root, &owned.dir, operation_id, owned.content.as_ref().unwrap()).map_err(io_error)?;
             owned.content.as_ref().unwrap().try_clone().map_err(io_error)?
@@ -211,6 +294,7 @@ pub fn copy_into(source: &Path, root: &Path, operation_id: &str, cancelled: &Ato
         owned.ready = true;
         native::verify_location(&root_path, operation_id, &owned.root, &owned.dir).map_err(io_error)?;
         if cancelled.load(Ordering::Acquire) || operation.cancelled.load(Ordering::Acquire) { return Err(CopyError::Cancelled); }
+        owned.ready_metadata = Some(owned.content.as_ref().ok_or(CopyError::Storage)?.metadata().map_err(io_error)?);
         owned.preparing = false;
         Ok(CopiedFile { name, path: root_path.join(operation_id).join(&owned.name), size: total })
     })();
@@ -323,10 +407,15 @@ mod native {
     }
     pub fn verify_location(path: &Path, id: &str, root: &Dir, dir: &Dir) -> io::Result<()> {
         let current = walk(path, false)?;
-        if !same(&current.file, &root.file)? || !same(&open(&current, OsStr::new(id), DIRECTORY)?, &dir.file)? {
+        if !private_dir(root)? || !private_dir(dir)? || !same(&current.file, &root.file)? || !same(&open(&current, OsStr::new(id), DIRECTORY)?, &dir.file)? {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
         Ok(())
+    }
+    pub fn open_ready(dir: &Dir, n: &str, content: &File) -> io::Result<File> {
+        let reader = open(dir, OsStr::new(n), NONBLOCK)?;
+        if !private_file(&reader)? || !same(&reader, content)? { return Err(io::Error::from(io::ErrorKind::PermissionDenied)); }
+        Ok(reader)
     }
     pub fn unchanged(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
         a.len() == b.len() && a.mtime() == b.mtime() && a.mtime_nsec() == b.mtime_nsec()
@@ -508,6 +597,7 @@ mod native {
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn SetFileInformationByHandle(handle: *mut std::ffi::c_void, class: u32, info: *const std::ffi::c_void, size: u32) -> i32;
+        fn GetFileInformationByHandleEx(handle: *mut std::ffi::c_void, class: u32, info: *mut std::ffi::c_void, size: u32) -> i32;
     }
     fn status(ok: i32) -> io::Result<()> { if ok != 0 { Ok(()) } else { Err(io::Error::last_os_error()) } }
     fn directory(path: &Path, owned: bool) -> io::Result<File> {
@@ -566,6 +656,24 @@ mod native {
     pub fn create_file(dir: &Dir, n: &str) -> io::Result<File> {
         File::options().read(true).write(true).create_new(true).access_mode(0xc0000000 | DELETE)
             .share_mode(1).custom_flags(OPEN_REPARSE).open(dir.path.join(n))
+    }
+    pub fn open_ready(dir: &Dir, n: &str, content: &File) -> io::Result<File> {
+        #[repr(C)]
+        #[derive(PartialEq, Eq)]
+        struct Identity { volume: u64, file: [u8; 16] }
+        fn identity(file: &File) -> io::Result<Identity> {
+            let mut value = Identity { volume: 0, file: [0; 16] };
+            unsafe { status(GetFileInformationByHandleEx(file.as_raw_handle(), 18, (&mut value as *mut Identity).cast(), std::mem::size_of::<Identity>() as u32))?; }
+            Ok(value)
+        }
+        // Sharing permits our existing write/delete-authority handle, which
+        // continues to exclude new write/delete opens for the whole lease.
+        let reader = File::options().read(true).share_mode(1 | 2 | 4).custom_flags(OPEN_REPARSE).open(dir.path.join(n))?;
+        let metadata = reader.metadata()?;
+        if !metadata.is_file() || metadata.file_attributes() & REPARSE != 0 || identity(&reader)? != identity(content)? {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        Ok(reader)
     }
     pub fn verify_location(_: &Path, _: &str, _: &Dir, _: &Dir) -> io::Result<()> { Ok(()) } // Pinned ancestors cannot be swapped.
     pub fn unchanged(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool { a.len() == b.len() && a.last_write_time() == b.last_write_time() }

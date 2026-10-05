@@ -31,9 +31,10 @@ else
   echo 'PENDING: native app-library checks (Cargo/platform prerequisites unavailable)'
 fi
 
-if command -v swiftc >/dev/null 2>&1 && [[ -f scripts/test-island-fsm.sh && -f scripts/test-file-preparation.sh ]]; then
+if command -v swiftc >/dev/null 2>&1 && [[ -f scripts/test-island-fsm.sh && -f scripts/test-file-preparation.sh && -f scripts/test-shelf-storage.sh ]]; then
   bash scripts/test-island-fsm.sh
   bash scripts/test-file-preparation.sh
+  bash scripts/test-shelf-storage.sh
 else
   echo 'PENDING: executable Swift hover/preparation checks'
 fi

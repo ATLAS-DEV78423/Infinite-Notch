@@ -8,7 +8,25 @@ struct PreparedFile: Sendable {
     let size: UInt64
 }
 
-enum FilePreparationError: Error, Sendable {
+// Native-only receipts: no Codable/IPC path or caller-supplied cleanup authority.
+struct ShelfAsset: Sendable {
+    let itemID: UUID
+    let operationID: UUID
+    let assetID: UUID
+    let name: String
+    let size: UInt64
+}
+
+enum ShelfLeasePurpose: Sendable, Equatable { case drag, share, mail, transfer }
+
+struct ShelfLease: Sendable {
+    let leaseID: UUID
+    let assetID: UUID
+    let purpose: ShelfLeasePurpose
+    let readyFile: PreparedFile
+}
+
+enum FilePreparationError: Error, Sendable, Equatable {
     case invalidSource, denied, storage, cancelled, invalidOperation, duplicateOperation, busy, capacity
 
     var message: String {
@@ -64,7 +82,7 @@ struct CurrentDropPreparation {
 
 enum FilePreparationCheckpoint: Equatable, Sendable {
     case afterSourceFstat, afterRootRevalidate, afterOperationCreate, afterPartialCreate
-    case chunk(Int), beforePublish, afterPublish
+    case chunk(Int), beforePublish, afterPublish, beforeLeaseDelivery
 }
 
 actor FilePreparation {
@@ -72,13 +90,33 @@ actor FilePreparation {
     private var tasks: [UUID: Task<PreparedFile, Error>] = [:]
     private var cancellation: [UUID: PreparationCancellation] = [:]
     private var retired: Set<UUID> = []
+    private var revoked: Set<UUID> = []
+    private var disposals: [UUID: Task<Bool, Never>] = [:]
+    private struct ShelfRecord {
+        let itemID: UUID
+        let operationID: UUID
+        var ready = false
+    }
+    private var assets: [UUID: ShelfRecord] = [:]
+    private var items: [UUID: UUID] = [:]
+    private var shelfOperations: [UUID: UUID] = [:]
+    private var seenItems: Set<UUID> = []
+    private var shelfAdmissionClosed = false
+    // Pending acquisition pins count too: removal cannot race native namespace validation.
+    private var leases: [UUID: UUID] = [:]
+    private var leaseDrain: CheckedContinuation<Void, Never>?
+    private var shutdownTask: Task<Void, Never>?
     private var active: UUID?
     private var admissionClosed = false
     private(set) var isShutDown = false
     private(set) var cleanupFailed = false
+    private(set) var shutdownWaiterCount = 0
     var activeCount: Int { active == nil ? 0 : 1 }
     var ownedCount: Int { tasks.count }
     var retiredCount: Int { retired.count }
+    var assetCount: Int { assets.count } // Includes preparing, removed-but-leased, and failed cleanup.
+    var leaseCount: Int { leases.count }
+    var itemCount: Int { assets.values.filter { !revoked.contains($0.operationID) }.count }
 
     init() { storage = PreparationStorage(root: nil, checkpoint: nil) }
 
@@ -89,24 +127,62 @@ actor FilePreparation {
     }
 
     func prepare(source: URL, operationID: UUID) async throws -> PreparedFile {
-        guard !isShutDown else { throw FilePreparationError.cancelled }
-        guard operationID.uuidString != "00000000-0000-0000-0000-000000000000" else {
-            throw FilePreparationError.invalidOperation
+        let result = try await prepareOwned(source: source, operationID: operationID, itemID: nil)
+        guard !isShutDown, !Task.isCancelled, !revoked.contains(operationID), tasks[operationID] != nil else {
+            await cancel(operationID: operationID)
+            throw FilePreparationError.cancelled
         }
+        return result.file
+    }
+
+    func prepareShelf(source: URL, itemID: UUID, operationID: UUID) async throws -> ShelfAsset {
+        let result = try await prepareOwned(source: source, operationID: operationID, itemID: itemID)
+        guard let assetID = result.assetID, assets[assetID]?.ready == true,
+              !isShutDown, !Task.isCancelled, !revoked.contains(operationID) else {
+            await cancel(operationID: operationID)
+            throw FilePreparationError.cancelled
+        }
+        return ShelfAsset(itemID: itemID, operationID: operationID, assetID: assetID,
+                          name: result.file.name, size: result.file.size)
+    }
+
+    private func prepareOwned(source: URL, operationID: UUID, itemID: UUID?) async throws
+        -> (file: PreparedFile, assetID: UUID?) {
+        guard !isShutDown else { throw FilePreparationError.cancelled }
+        guard valid(operationID) else { throw FilePreparationError.invalidOperation }
         guard tasks[operationID] == nil, !retired.contains(operationID) else {
             throw FilePreparationError.duplicateOperation
         }
+        if let itemID {
+            guard valid(itemID) else { throw FilePreparationError.invalidOperation }
+            guard !seenItems.contains(itemID) else { throw FilePreparationError.duplicateOperation }
+        }
         if Task.isCancelled {
             retireUnseen(operationID)
+            if let itemID { rememberItem(itemID) }
             throw FilePreparationError.cancelled
         }
         guard !admissionClosed, tasks.count + retired.count < 4096 else { throw FilePreparationError.capacity }
         guard !cleanupFailed else { throw FilePreparationError.storage }
-        // ponytail: legacy one-file ceiling; use a bounded shelf queue when multi-item preparation is approved.
+        if itemID != nil {
+            guard !shelfAdmissionClosed, seenItems.count < 4096, assets.count < 32 else {
+                throw FilePreparationError.capacity
+            }
+        }
+        // ponytail: one active copy, no ingest queue; shelf admission explicitly refuses concurrent preparation.
         guard active == nil else {
             retired.insert(operationID)
             throw FilePreparationError.busy
         }
+        let assetID: UUID?
+        if let itemID {
+            let id = UUID()
+            assetID = id
+            assets[id] = ShelfRecord(itemID: itemID, operationID: operationID)
+            items[itemID] = id
+            shelfOperations[operationID] = id
+            seenItems.insert(itemID)
+        } else { assetID = nil }
         let control = PreparationCancellation()
         let storage = self.storage
         let worker = Task<PreparedFile, Error> {
@@ -121,43 +197,124 @@ actor FilePreparation {
             } onCancel: { control.cancel() }
             guard !isShutDown, !Task.isCancelled, !control.isCancelled else { throw FilePreparationError.cancelled }
             if active == operationID { active = nil }
-            return file
+            if let assetID { assets[assetID]?.ready = true }
+            return (file, assetID)
         } catch {
-            control.cancel()
-            let removed = await storage.discard(operationID: operationID)
-            cleanupFailed = cleanupFailed || !removed
-            retire(operationID)
+            revoke(operationID)
+            await dispose(operationID)
             throw (error as? FilePreparationError) ?? FilePreparationError.storage
         }
     }
 
-    func cancel(operationID: UUID) async {
-        guard let worker = tasks[operationID] else {
-            // An unseen cancellation is remembered before a late prepare can be admitted.
-            // Pressure closes admission; it never evicts ready copies or old opaque IDs.
-            retireUnseen(operationID)
+    func acquire(assetID: UUID, purpose: ShelfLeasePurpose) async throws -> ShelfLease {
+        guard !isShutDown, !Task.isCancelled else { throw FilePreparationError.cancelled }
+        guard valid(assetID), let asset = assets[assetID], asset.ready else { throw FilePreparationError.invalidOperation }
+        guard !revoked.contains(asset.operationID) else { throw FilePreparationError.cancelled }
+        guard !cleanupFailed else { throw FilePreparationError.storage }
+        guard leases.count < 32 else { throw FilePreparationError.capacity }
+        let leaseID = UUID()
+        leases[leaseID] = assetID
+        do {
+            let file = try await storage.readyReceipt(operationID: asset.operationID)
+            // Reentrancy may have revoked the item while native validation was queued.
+            guard !isShutDown, !Task.isCancelled, !revoked.contains(asset.operationID), assets[assetID]?.ready == true else {
+                throw FilePreparationError.cancelled
+            }
+            return ShelfLease(leaseID: leaseID, assetID: assetID, purpose: purpose, readyFile: file)
+        } catch {
+            await release(leaseID: leaseID)
+            throw (error as? FilePreparationError) ?? FilePreparationError.storage
+        }
+    }
+
+    func release(leaseID: UUID) async {
+        guard let assetID = leases.removeValue(forKey: leaseID) else { return }
+        if leases.isEmpty { let waiting = leaseDrain; leaseDrain = nil; waiting?.resume() }
+        if let asset = assets[assetID], revoked.contains(asset.operationID) { await dispose(asset.operationID) }
+    }
+
+    func remove(itemID: UUID) async {
+        guard valid(itemID) else { return }
+        guard let assetID = items[itemID], let asset = assets[assetID] else {
+            rememberItem(itemID) // Remove-before-admission is remembered, without filesystem authority.
             return
         }
-        cancellation[operationID]?.cancel()
-        _ = await worker.result
-        let removed = await storage.discard(operationID: operationID)
-        cleanupFailed = cleanupFailed || !removed
-        retire(operationID)
+        revoke(asset.operationID) // Synchronous revocation, before any worker/disposal await.
+        await dispose(asset.operationID)
+    }
+
+    func cancel(operationID: UUID) async {
+        guard tasks[operationID] != nil else {
+            // An unseen cancellation is remembered before a late prepare can be admitted.
+            // Pressure closes admission; it never evicts ready copies or old opaque IDs.
+            if valid(operationID) { retireUnseen(operationID) }
+            return
+        }
+        revoke(operationID)
+        await dispose(operationID)
     }
 
     func shutdown() async {
+        shutdownWaiterCount += 1
+        defer { shutdownWaiterCount -= 1 }
+        if let shutdownTask { await shutdownTask.value; return }
         isShutDown = true
-        for control in cancellation.values { control.cancel() }
-        let ownedWorkers = Array(tasks.values)
-        for worker in ownedWorkers { _ = await worker.result }
+        admissionClosed = true
+        for id in tasks.keys { revoke(id) }
+        let stopping = Task { await self.finishShutdown() }
+        shutdownTask = stopping
+        await stopping.value
+        // A failed sweep must not be cached. The app answers a failed quit with
+        // "try quitting again", and that retry has to re-run native cleanup.
+        if cleanupFailed { shutdownTask = nil }
+    }
+
+    private func finishShutdown() async {
+        await withCheckedContinuation { continuation in
+            if leases.isEmpty { continuation.resume() }
+            else { leaseDrain = continuation }
+        }
+        for id in Array(tasks.keys) { await dispose(id) }
         let removed = await storage.shutdown()
-        cleanupFailed = !removed
-        tasks.removeAll()
-        cancellation.removeAll()
+        cleanupFailed = cleanupFailed || !removed
         active = nil
     }
 
+    private func revoke(_ id: UUID) {
+        // Record the revocation unconditionally: dispose()'s lease early-return
+        // relies on `revoked` to know a later release must finish the disposal.
+        revoked.insert(id)
+        cancellation[id]?.cancel()
+    }
+
+    private func dispose(_ id: UUID) async {
+        guard let worker = tasks[id] else { return }
+        if let assetID = shelfOperations[id], leases.values.contains(assetID) { return }
+        let disposal: Task<Bool, Never>
+        if let existing = disposals[id] { disposal = existing }
+        else {
+            let storage = self.storage
+            disposal = Task { _ = await worker.result; return await storage.discard(operationID: id) }
+            disposals[id] = disposal
+        }
+        let removed = await disposal.value
+        guard tasks[id] != nil else { return } // Concurrent waiters finalize one immutable disposal result.
+        if active == id { active = nil }
+        if removed { retire(id) }
+        else {
+            cleanupFailed = true
+            // Keep the task, failed disposal, asset, and anchored native authority,
+            // but drop the memo so a later quit genuinely re-attempts the removal.
+            disposals.removeValue(forKey: id)
+        }
+    }
+
     private func retire(_ id: UUID) {
+        if let assetID = shelfOperations.removeValue(forKey: id), let asset = assets.removeValue(forKey: assetID) {
+            items.removeValue(forKey: asset.itemID)
+        }
+        disposals.removeValue(forKey: id)
+        revoked.remove(id)
         tasks.removeValue(forKey: id)
         cancellation.removeValue(forKey: id)
         retired.insert(id)
@@ -170,6 +327,15 @@ actor FilePreparation {
             else { admissionClosed = true }
         }
     }
+
+    private func rememberItem(_ id: UUID) {
+        if !seenItems.contains(id) {
+            if seenItems.count < 4096 { seenItems.insert(id) }
+            else { shelfAdmissionClosed = true } // Bound tombstones without forgetting late removals.
+        }
+    }
+
+    private func valid(_ id: UUID) -> Bool { id.uuidString != "00000000-0000-0000-0000-000000000000" }
 }
 
 /// Each registry entry shares exactly one cancellation/publish boundary.
@@ -196,6 +362,7 @@ private final class PreparationStorage: @unchecked Sendable {
     private let checkpoint: (@Sendable (FilePreparationCheckpoint) -> Void)?
     private var root: OwnedDirectory?
     private var operations: [UUID: OwnedDirectory] = [:]
+    private var ready: [UUID: (file: PreparedFile, identity: stat)] = [:]
 
     init(root: URL?, checkpoint: (@Sendable (FilePreparationCheckpoint) -> Void)?) {
         requestedRoot = root
@@ -217,11 +384,35 @@ private final class PreparationStorage: @unchecked Sendable {
         }
     }
 
+    func readyReceipt(operationID: UUID) async throws -> PreparedFile {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    // The checkpoint is the last controlled pause before delivery,
+                    // so the validating revalidation is also the delivering one.
+                    self.checkpoint?(.beforeLeaseDelivery)
+                    continuation.resume(returning: try self.revalidateReady(operationID))
+                } catch { continuation.resume(throwing: (error as? FilePreparationError) ?? FilePreparationError.storage) }
+            }
+        }
+    }
+
+    private func revalidateReady(_ id: UUID) throws -> PreparedFile {
+        guard let root, let directory = operations[id], let entry = ready[id] else { throw FilePreparationError.invalidOperation }
+        try root.revalidate()
+        try directory.revalidate()
+        let delivered = try NativePath.openFile(entry.file.url)
+        guard NativePath.unchanged(entry.identity, try delivered.info()),
+              directory.matches(entry.file.name, entry.identity) else { throw FilePreparationError.invalidSource }
+        return entry.file
+    }
+
     func shutdown() async -> Bool {
         await withCheckedContinuation { continuation in
             queue.async {
-                var removed = true
-                for id in Array(self.operations.keys) { if !self.removeOperation(id) { removed = false } }
+                // Every operation goes through the actor's shared lease-aware disposal boundary.
+                // Failed entries remain owned; shutdown cannot silently free them on a second sweep.
+                var removed = self.operations.isEmpty
                 if let root = self.root {
                     if self.operations.isEmpty && root.remove() { self.root = nil }
                     else { removed = false }
@@ -316,13 +507,16 @@ private final class PreparationStorage: @unchecked Sendable {
               NativePath.unchanged(committedIdentity, try delivered.info()),
               directory.matches(name, committedIdentity) else { throw FilePreparationError.invalidSource }
         try control.check()
-        return PreparedFile(operationID: id, url: readyURL, name: name, size: total)
+        let file = PreparedFile(operationID: id, url: readyURL, name: name, size: total)
+        ready[id] = (file, committedIdentity)
+        return file
     }
 
     private func removeOperation(_ id: UUID) -> Bool {
         guard let directory = operations[id] else { return true } // Unknown IDs authorize no filesystem action.
         guard directory.remove() else { return false }
         operations.removeValue(forKey: id)
+        ready.removeValue(forKey: id)
         return true
     }
 

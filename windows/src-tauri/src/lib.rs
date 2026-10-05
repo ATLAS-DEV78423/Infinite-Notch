@@ -466,7 +466,12 @@ pub fn run() {
                         let owner = copies.inner().clone();
                         let handle = app.clone();
                         tauri::async_runtime::spawn_blocking(move || {
-                            owner.shutdown();
+                            // Unremovable owned content is reported, never
+                            // silently treated as a clean exit. Cleanup has
+                            // finished either way, so the app can still quit.
+                            if let Err(error) = owner.shutdown_checked() {
+                                log::line(format!("Native file cleanup could not finish safely: {error}"));
+                            }
                             handle.exit(0);
                         });
                     }

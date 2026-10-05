@@ -5,25 +5,14 @@ on:
     branches: [feat/notch-expansion]
     paths:
       - 'NotchBuddy/**'
-      - 'scripts/test-screen-geometry.sh'
-      - 'scripts/test-safe-links.sh'
-      - 'scripts/test-chat-parsing.sh'
-      - 'scripts/test-plan-gauge.sh'
-      - 'scripts/test-ask-question.sh'
-      - 'scripts/test-island-fsm.sh'
-      - 'scripts/test-file-preparation.sh'
+      # Glob, not an enumeration: a new Mac-only runner must never be silently skipped.
+      - 'scripts/test-*.sh'
       - 'tests/**'
       - '.github/workflows/native-macos.yml'
   pull_request:
     paths:
       - 'NotchBuddy/**'
-      - 'scripts/test-screen-geometry.sh'
-      - 'scripts/test-safe-links.sh'
-      - 'scripts/test-chat-parsing.sh'
-      - 'scripts/test-plan-gauge.sh'
-      - 'scripts/test-ask-question.sh'
-      - 'scripts/test-island-fsm.sh'
-      - 'scripts/test-file-preparation.sh'
+      - 'scripts/test-*.sh'
       - 'tests/**'
       - '.github/workflows/native-macos.yml'
   workflow_dispatch:
@@ -137,6 +126,11 @@ jobs:
         if: ${{ always() }}
         run: bash scripts/test-file-preparation.sh
 
+      - name: Test shelf storage assets and leases
+        id: shelf_storage
+        if: ${{ always() }}
+        run: bash scripts/test-shelf-storage.sh
+
       - name: Summarize limited qualification results
         if: ${{ always() }}
         run: |
@@ -152,6 +146,7 @@ jobs:
           | Ask question | ${{ steps.ask_question.outcome }} |
           | Island hover FSM | ${{ steps.island_fsm.outcome }} |
           | File preparation readiness | ${{ steps.file_preparation.outcome }} |
+          | Shelf storage assets and leases | ${{ steps.shelf_storage.outcome }} |
           | NotchBuddy Debug (unsigned) | ${{ steps.debug_direct.outcome }} |
           | CoucouAppStore Debug (unsigned) | ${{ steps.debug_appstore.outcome }} |
           | NotchBuddy Release (unsigned) | ${{ steps.release_direct.outcome }} |
