@@ -790,7 +790,8 @@ mod tests {
         assert!(std::fs::read(&foreign).fixture() == b"foreign", "native cleanup deleted an unowned entry");
         assert!(std::fs::read(source).fixture() == b"synthetic", "failed cleanup changed original bytes");
         std::fs::remove_file(foreign).fixture(); // Test-owned synthetic foreign fixture.
-        assert!(copies.0.root.join(&operation).exists(), "test fixture did not leave the unremovable operation in place");
+        assert!(copies.0.root.join(&asset.operation_id).exists(),
+            "failed disposal was not retained after its obstruction was removed");
     }
 
     #[cfg(target_os = "linux")]
