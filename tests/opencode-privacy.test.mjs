@@ -90,7 +90,7 @@ test("ignored events return before reading data, location, identity or policy", 
   for (const type of ["permission.asked", "permission.replied", "unknown.event", "session.text.delta",
     "session.text.started", "session.text.ended", "session.instructions.updated", "session.renamed",
     "session.execution.started", "session.step.started", "session.tool.input.ended", "session.idle",
-    "session.status", "session.error", "message.updated", "message.part.updated", "session.moved", "session.reset"]) {
+    "session.status", "session.error", "message.updated", "message.part.updated", "session.reset"]) {
     assert.deepEqual(toCoucouEvents(forbidden({ type }, "data", "properties", "location", "id"), state()), [])
   }
 })
@@ -130,44 +130,48 @@ test("opaque IDs preserve spaces, punctuation and Unicode without normalization"
   }
 })
 
-test("cwd comes only from a valid matching native envelope, never data or cached scope", () => {
+test("cwd comes only from the session's own reported location, never the registration scope", () => {
   for (const cwd of ["/repo/日本語", "C:\\repo", "/" + "é".repeat(511) + "a"]) {
-    assert.equal(toCoucouEvents(native("session.created", { sessionID: "ses1" }, cwd), state(cwd))[0].cwd, cwd)
+    assert.equal(toCoucouEvents(native("session.created", { sessionID: "ses1", location: { directory: cwd } }, null), state("/elsewhere"))[0].cwd, cwd)
+    assert.equal(toCoucouEvents(native("session.created", { sessionID: "ses1" }, cwd), state("/elsewhere"))[0].cwd, cwd)
   }
   for (const cwd of [undefined, null, {}, "", "relative", "/bad\npath", "/\ud800", "/" + "é".repeat(512)]) {
     const event = native("session.created")
     event.location.directory = cwd
-    assert.deepEqual(toCoucouEvents(event, state()), [])
-    const invalidScope = state()
-    invalidScope.directory = cwd
-    assert.deepEqual(toCoucouEvents(native("session.created"), invalidScope), [])
+    assert.deepEqual(toCoucouEvents(event, state("/repo")), [], "an unreported session location cannot admit a session")
   }
-  const monitor = state()
-  assert.deepEqual(toCoucouEvents(native("session.created", { sessionID: "ses1", location: { directory: "/repo" } }, null), monitor), [])
-  toCoucouEvents(native("session.created", forbidden({ sessionID: "ses1" }, "location", "directory")), monitor)
-  assert.deepEqual(toCoucouEvents(native("session.execution.succeeded", { sessionID: "ses1" }, null), monitor),
-    [{ hook_event_name: "Stop", ...base }])
+  const monitor = state("/repo")
+  assert.equal(toCoucouEvents(native("session.created", { sessionID: "ses1", location: { directory: "/session" } }, null), monitor)[0].cwd,
+    "/session", "the session directory wins over the registration scope")
+  assert.deepEqual(toCoucouEvents(native("session.moved", { sessionID: "ses1" }, "/moved"), monitor), [])
+  assert.equal(toCoucouEvents(native("session.execution.succeeded", { sessionID: "ses1" }, null), monitor)[0].cwd, "/moved")
+  assert.deepEqual(toCoucouEvents(native("session.moved", { sessionID: "ses1", location: { directory: "relative" } }, null), monitor), [])
+  assert.deepEqual(toCoucouEvents(native("session.execution.failed", { sessionID: "ses1" }, null), monitor),
+    [{ hook_event_name: "StopFailure", ...base }], "an unreported move leaves the directory unknown")
+  assert.deepEqual(toCoucouEvents(native("session.moved", { sessionID: "ses1", location: { directory: "/back" } }, null), monitor), [])
+  assert.deepEqual(toCoucouEvents(native("session.inbox.enqueued", { sessionID: "ses1", inboxID: "inbox1", item: { type: "user" } }, null), monitor),
+    [{ hook_event_name: "UserPromptSubmit", ...base, cwd: "/back" }])
+  assert.deepEqual(toCoucouEvents(native("session.moved", { sessionID: "unknown", location: { directory: "/other" } }, null), state()),
+    [], "an unowned session move is ignored")
 })
 
-test("shared native streams are scoped before foreign data is read or names are enriched", () => {
-  const a = state("/repo")
-  const b = state("/other")
-  const start = native("session.created")
-  assert.equal(toCoucouEvents(start, a).length, 1)
-  assert.deepEqual(toCoucouEvents(start, b), [])
-  const other = native("session.created", { sessionID: "other" }, "/other")
-  assert.deepEqual(toCoucouEvents(other, a), [])
-  assert.equal(toCoucouEvents(other, b).length, 1)
-  toCoucouEvents(tool("input.started", { name: "bash" }), a)
-  const foreignName = tool("input.started", { name: "private_tool" }, "/other")
-  assert.deepEqual(toCoucouEvents(foreignName, a), [])
-  const foreign = native("session.tool.success", {}, "/other")
-  forbidden(foreign, "data", "id")
-  assert.deepEqual(toCoucouEvents(foreign, a), [])
-  assert.deepEqual(toCoucouEvents(tool("called"), a), [{ hook_event_name: "PreToolUse", ...located, tool_name: "bash" }])
-  assert.deepEqual(toCoucouEvents(native("session.execution.failed", { sessionID: "other" }, null), a), [])
-  assert.deepEqual(toCoucouEvents(native("session.deleted", { sessionID: "ses1" }, "/other"), a), [])
-  assert.equal(a.sessions.has("ses1"), true)
+test("each session reports its own directory and the registration scope never filters it", () => {
+  const monitor = state("/repo")
+  assert.equal(toCoucouEvents(native("session.created"), monitor)[0].cwd, "/repo")
+  const other = native("session.created", { sessionID: "other", location: { directory: "/other" } }, "/other")
+  assert.equal(toCoucouEvents(other, monitor)[0].cwd, "/other", "a session outside the registration scope keeps its own directory")
+  assert.deepEqual(toCoucouEvents(other, monitor), [], "duplicate lifecycle stays deduped")
+  toCoucouEvents(tool("input.started", { name: "bash" }), monitor)
+  assert.deepEqual(toCoucouEvents(tool("called"), monitor), [{ hook_event_name: "PreToolUse", ...located, tool_name: "bash" }])
+  assert.deepEqual(toCoucouEvents(tool("input.started", { sessionID: "other", id: "call2", name: "read" }, "/other"), monitor), [])
+  assert.deepEqual(toCoucouEvents(tool("called", { sessionID: "other", id: "call2" }, "/other"), monitor),
+    [{ hook_event_name: "PreToolUse", ...base, session_id: "other", cwd: "/other", tool_name: "read" }])
+  assert.deepEqual(toCoucouEvents(native("session.execution.succeeded", { sessionID: "other" }, null), monitor),
+    [{ hook_event_name: "Stop", ...base, session_id: "other", cwd: "/other" }])
+  assert.deepEqual(toCoucouEvents(native("session.deleted", { sessionID: "other" }, "/other"), monitor),
+    [{ hook_event_name: "SessionEnd", ...base, session_id: "other", cwd: "/other" }])
+  assert.equal(monitor.sessions.has("ses1"), true)
+  assert.equal(monitor.sessions.has("other"), false)
 })
 
 test("tool labels are bounded safe metadata with generic outcomes when start/name is absent", () => {
@@ -192,11 +196,11 @@ test("native failure persists until a new user inbox, including duplicate admiss
   toCoucouEvents(prior, monitor)
   const failure = () => native("session.execution.failed", forbidden({ sessionID: "ses1" }, "error"), null)
   const success = () => native("session.execution.succeeded", { sessionID: "ses1" }, null)
-  assert.deepEqual(toCoucouEvents(failure(), monitor), [{ hook_event_name: "StopFailure", ...base }])
+  assert.deepEqual(toCoucouEvents(failure(), monitor), [{ hook_event_name: "StopFailure", ...located }])
   assert.deepEqual(toCoucouEvents(success(), monitor), [])
   const next = prompt("next")
   assert.deepEqual(toCoucouEvents(next, monitor), [{ hook_event_name: "UserPromptSubmit", ...located }])
-  assert.deepEqual(toCoucouEvents(success(), monitor), [{ hook_event_name: "Stop", ...base }])
+  assert.deepEqual(toCoucouEvents(success(), monitor), [{ hook_event_name: "Stop", ...located }])
   toCoucouEvents(failure(), monitor)
   for (const duplicate of [start, prior, next, prompt("prior"), prompt("next"), prompt("synthetic", "ses1", "synthetic")]) {
     assert.deepEqual(toCoucouEvents(duplicate, monitor), [])
@@ -223,10 +227,10 @@ test("same call and inbox IDs in different sessions cannot collide or share name
   }
   toCoucouEvents(native("session.execution.failed"), monitor)
   assert.deepEqual(toCoucouEvents(tool("failed", { sessionID: "ses2" }, null), monitor),
-    [{ hook_event_name: "PostToolUseFailure", coucou_agent: "opencode", session_id: "ses2", tool_name: "read" }])
+    [{ hook_event_name: "PostToolUseFailure", coucou_agent: "opencode", session_id: "ses2", cwd: "/repo", tool_name: "read" }])
   assert.deepEqual(toCoucouEvents(tool("success", {}, null), monitor), [])
   assert.deepEqual(toCoucouEvents(native("session.execution.succeeded", { sessionID: "ses2" }, null), monitor),
-    [{ hook_event_name: "Stop", coucou_agent: "opencode", session_id: "ses2" }])
+    [{ hook_event_name: "Stop", coucou_agent: "opencode", session_id: "ses2", cwd: "/repo" }])
   assert.deepEqual(toCoucouEvents(native("session.execution.succeeded", { sessionID: "ses1" }, null), monitor), [])
 })
 
@@ -286,8 +290,8 @@ test("locationless deletion clears only its owner and leaves no names or tombsto
     toCoucouEvents(tool("input.started", { sessionID, name: "bash" }), monitor)
     toCoucouEvents(native("session.execution.failed", { sessionID }), monitor)
   }
-  const end = native("session.deleted", forbidden({ sessionID: "ses1" }, "location", "error", "text"), null)
-  assert.deepEqual(toCoucouEvents(end, monitor), [{ hook_event_name: "SessionEnd", ...base }])
+  const end = native("session.deleted", forbidden({ sessionID: "ses1" }, "info", "error", "text", "title"), null)
+  assert.deepEqual(toCoucouEvents(end, monitor), [{ hook_event_name: "SessionEnd", ...located }])
   assert.deepEqual(toCoucouEvents(end, monitor), [])
   assert.deepEqual(toCoucouEvents(native("session.execution.succeeded", { sessionID: "ses1" }, null), monitor), [])
   assert.equal(monitor.sessions.size, 1)
@@ -354,7 +358,7 @@ process.stdin.on("end", () => writeFileSync(process.env.COUCOU_CAPTURE + "/" + p
     const ctx = { event: { async *subscribe({ signal }) {
       controllerSignals.push(signal)
       for (const event of events) yield event
-      yield forbidden(native("session.created", {}, "/other"), "data")
+      yield forbidden({ type: "permission.asked" }, "data", "id", "location")
       throw new Error("PRIVATE_STREAM_ERROR")
     } }, get location() {
       locationReads++
@@ -372,11 +376,11 @@ process.stdin.on("end", () => writeFileSync(process.env.COUCOU_CAPTURE + "/" + p
     const captures = await Promise.all(files.map(async name => JSON.parse(await readFile(join(directory, name), "utf8"))))
     captures.sort((a, b) => a.args.at(-1).localeCompare(b.args.at(-1)))
     assert.deepEqual(captures, [
-      { args: ["--agent", "opencode", "PostToolUseFailure"], input: JSON.stringify({ hook_event_name: "PostToolUseFailure", ...base, tool_name: "bash" }) + "\n" },
-      { args: ["--agent", "opencode", "SessionStart"], input: JSON.stringify({ hook_event_name: "SessionStart", ...base, cwd: "/repo" }) + "\n" },
+      { args: ["--agent", "opencode", "PostToolUseFailure"], input: JSON.stringify({ hook_event_name: "PostToolUseFailure", ...located, tool_name: "bash" }) + "\n" },
+      { args: ["--agent", "opencode", "SessionStart"], input: JSON.stringify({ hook_event_name: "SessionStart", ...located }) + "\n" },
     ])
     assert.equal(JSON.stringify(events), original)
-    assert.equal(locationReads, 1, "registration directory is read only to scope shared events")
+    assert.equal(locationReads, 0, "the registration location is never read as a session cwd")
     assert.deepEqual(logs, [])
     await cleanup()
     assert.equal(controllerSignals[0].aborted, true)

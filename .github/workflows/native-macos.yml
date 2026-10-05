@@ -131,6 +131,11 @@ jobs:
         if: ${{ always() }}
         run: bash scripts/test-shelf-storage.sh
 
+      - name: Test aggregate CPU sampling
+        id: cpu_monitor
+        if: ${{ always() }}
+        run: bash scripts/test-cpu-monitor.sh
+
       - name: Summarize limited qualification results
         if: ${{ always() }}
         run: |
@@ -147,6 +152,7 @@ jobs:
           | Island hover FSM | ${{ steps.island_fsm.outcome }} |
           | File preparation readiness | ${{ steps.file_preparation.outcome }} |
           | Shelf storage assets and leases | ${{ steps.shelf_storage.outcome }} |
+          | Aggregate CPU sampling | ${{ steps.cpu_monitor.outcome }} |
           | NotchBuddy Debug (unsigned) | ${{ steps.debug_direct.outcome }} |
           | CoucouAppStore Debug (unsigned) | ${{ steps.debug_appstore.outcome }} |
           | NotchBuddy Release (unsigned) | ${{ steps.release_direct.outcome }} |

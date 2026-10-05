@@ -8,7 +8,7 @@ export default Plugin.define({
   setup(ctx) {
     const sender = createRelay(process.env.COUCOU_HOOK ?? "coucou-hook", "opencode")
     const controller = new AbortController()
-    const monitorState = { directory: ctx.location?.directory, sessions: new Map(), seen: new Map(), calls: new Map() }
+    const monitorState = { sessions: new Map(), seen: new Map(), calls: new Map() }
 
     void (async () => {
       try {

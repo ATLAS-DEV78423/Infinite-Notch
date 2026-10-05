@@ -6,7 +6,7 @@ const LOOKUP_CAP = 256
 const TYPES = new Set([
   "session.created", "session.deleted", "session.inbox.enqueued", "session.tool.input.started",
   "session.tool.called", "session.tool.success", "session.tool.failed",
-  "session.execution.succeeded", "session.execution.failed",
+  "session.execution.succeeded", "session.execution.failed", "session.moved",
 ])
 
 function bounded(value, limit) {
@@ -32,21 +32,31 @@ function payload(eventName, data, fields = {}) {
   }
 }
 
-/** OpenCode 2.0.6 baseline; state belongs to one location-scoped registration. */
+/** The session's own reported location; the plugin's registration directory is never a cwd source. */
+function sessionDirectory(event, info) {
+  return directory(info?.location?.directory) ?? directory(event.location?.directory)
+}
+
+/** OpenCode 2.0.6 baseline; each session remembers only the directory it reported itself. */
 export function toCoucouEvents(event, monitorState) {
   const type = event?.type
   if (!TYPES.has(type)) return []
-  const scope = directory(monitorState?.directory)
-  if (scope === undefined) return []
-  const location = event.location
-  const cwd = location === undefined ? undefined : directory(location?.directory)
-  if (location !== undefined && cwd !== scope) return []
   const info = event.data
   const sessionId = opaque(info?.sessionID)
   const eventId = opaque(event.id)
   if (sessionId === undefined || eventId === undefined) return []
-  const data = { sessionId, cwd }
+  const reported = sessionDirectory(event, info)
   let session = monitorState.sessions.get(sessionId)
+
+  // ponytail: a move is the one silence that clears the directory; no scope or process fallback exists.
+  if (type === "session.moved") {
+    if (!session) return []
+    session.directory = reported
+    return []
+  }
+  const cwd = reported ?? session?.directory
+  if (session !== undefined && reported !== undefined) session.directory = reported
+  const data = { sessionId, cwd }
 
   if (type === "session.deleted") {
     if (!session) return []
@@ -77,7 +87,7 @@ export function toCoucouEvents(event, monitorState) {
   if (monitorState.seen.size + (inboxKey === undefined ? 1 : 2) > LOOKUP_CAP
     || (callKey !== undefined && !call && monitorState.calls.size >= LOOKUP_CAP)) return []
   if (!session) {
-    session = { failed: false }
+    session = { failed: false, directory: cwd }
     monitorState.sessions.set(sessionId, session)
   }
   monitorState.seen.set(eventKey, sessionId)

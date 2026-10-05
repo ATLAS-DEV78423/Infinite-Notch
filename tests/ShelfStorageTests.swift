@@ -25,6 +25,18 @@ enum ShelfStorageTests {
             ("ready_symlink_replacement_preserves_foreign_file", ready_symlink_replacement_preserves_foreign_file),
             ("ready_ancestor_swap_refuses_acquire_and_cleans_anchored_owner", ready_ancestor_swap_refuses_acquire_and_cleans_anchored_owner),
             ("item_namespace_pressure_closes_admission_without_forgetting_removals", item_namespace_pressure_closes_admission_without_forgetting_removals),
+            ("folder_round_trip_preserves_nested_and_empty_directories", folder_round_trip_preserves_nested_and_empty_directories),
+            ("folder_4096_entries_admitted_and_4097th_refused", folder_4096_entries_admitted_and_4097th_refused),
+            ("folder_depth_64_admitted_and_65_refused", folder_depth_64_admitted_and_65_refused),
+            ("folder_symlink_and_special_entries_refused", folder_symlink_and_special_entries_refused),
+            ("folder_symlinked_root_and_ancestor_refused", folder_symlinked_root_and_ancestor_refused),
+            ("folder_existing_item_directory_refused", folder_existing_item_directory_refused),
+            ("refused_folder_leaves_no_partial_tree_and_preserves_original", refused_folder_leaves_no_partial_tree_and_preserves_original),
+            ("revoked_folder_copy_removes_its_partial_tree", revoked_folder_copy_removes_its_partial_tree),
+            ("folder_cleanup_preserves_foreign_entries_and_reports_failure", folder_cleanup_preserves_foreign_entries_and_reports_failure),
+            ("folder_and_text_ingest_refuse_concurrent_preparation", folder_and_text_ingest_refuse_concurrent_preparation),
+            ("text_payload_bounds_and_utf8_are_explicit", text_payload_bounds_and_utf8_are_explicit),
+            ("link_is_stored_as_text_and_never_opened", link_is_stored_as_text_and_never_opened),
         ]
         for (name, run) in cases {
             diagnostic("RUN \(name)")
@@ -421,6 +433,282 @@ enum ShelfStorageTests {
         }
     }
 
+    static func folder_round_trip_preserves_nested_and_empty_directories() async throws {
+        try await withFixture { f in
+            let tree = try f.folder("tree")
+            try f.write("tree/top.txt", Data([1, 2]))
+            try f.write("tree/nested/inner/deep.bin", Data([9, 9, 9]))
+            try f.folder("tree/nested/empty")
+            let asset = try await f.prepareFolder(tree)
+            precondition(asset.kind == .folder && asset.name == "tree" && asset.size == 5,
+                         "a folder receipt reports its kind, its own name, and the actual streamed total")
+            let lease = try await f.hold(asset, .drag), ready = lease.readyFile.url
+            try checkBytes(ready.appendingPathComponent("top.txt"), Data([1, 2]))
+            try checkBytes(ready.appendingPathComponent("nested/inner/deep.bin"), Data([9, 9, 9]))
+            precondition(isDirectory(ready.appendingPathComponent("nested/empty")),
+                         "an empty local directory must survive in the copied tree")
+            precondition(exists(tree.appendingPathComponent("nested/inner/deep.bin")),
+                         "the original folder is never owned by the copy")
+            await f.release(lease)
+            precondition(!exists(ready), "last release must remove the whole owned tree")
+            try checkBytes(tree.appendingPathComponent("nested/inner/deep.bin"), Data([9, 9, 9]))
+        }
+    }
+
+    static func folder_4096_entries_admitted_and_4097th_refused() async throws {
+        try await withFixture { f in
+            let wide = try f.folder("wide")
+            for index in 0..<4_097 {
+                try Data([UInt8(index % 251)]).write(to: wide.appendingPathComponent("\(index)"),
+                                                    options: .withoutOverwriting)
+            }
+            let refused = UUID()
+            await refuses(.tooManyEntries) { try await f.prepareFolder(wide, operationID: refused) }
+            precondition(!exists(f.root.appendingPathComponent(refused.uuidString)),
+                         "an over-count folder leaves no partial tree")
+            // The ceiling admits 4096 and refuses 4097, so exactly one entry is removed and
+            // the same tree is offered again rather than a second oversized tree built.
+            guard Darwin.unlink(wide.appendingPathComponent("4096").path) == 0 else { throw FilePreparationError.storage }
+            let asset = try await f.prepareFolder(wide)
+            precondition(asset.size == 4_096, "every admitted entry contributes its actual bytes")
+            let lease = try await f.hold(asset, .share)
+            try checkBytes(lease.readyFile.url.appendingPathComponent("0"), Data([0]))
+            try checkBytes(lease.readyFile.url.appendingPathComponent("4095"), Data([UInt8(4095 % 251)]))
+            await f.copies.remove(itemID: asset.itemID)
+            let failed = await f.copies.cleanupFailed
+            precondition(!failed, "a refused oversized folder must clean its own partial tree")
+            precondition(exists(wide.appendingPathComponent("0")), "the original tree is untouched")
+            try checkBytes(wide.appendingPathComponent("4095"), Data([UInt8(4095 % 251)]))
+        }
+    }
+
+    static func folder_depth_64_admitted_and_65_refused() async throws {
+        try await withFixture { f in
+            let deep = try f.folder("deep")
+            var chain = ""
+            for level in 1...64 { chain = chain.isEmpty ? "\(level)" : "\(chain)/\(level)" }
+            try f.folder("deep/\(chain)")
+            try f.write("deep/\(chain)/leaf.txt", Data([5]))
+            let asset = try await f.prepareFolder(deep)
+            precondition(asset.size == 1)
+            let lease = try await f.hold(asset, .mail)
+            let ready = lease.readyFile.url.appendingPathComponent(chain)
+            precondition(isDirectory(ready), "a tree at the depth ceiling is copied whole")
+            try checkBytes(ready.appendingPathComponent("leaf.txt"), Data([5]))
+            // One level past the ceiling refuses the whole item instead of clipping it.
+            try f.folder("deep/\(chain)/65")
+            try f.write("deep/\(chain)/65/leaf.txt", Data([5]))
+            await refuses(.tooDeep) { try await f.prepareFolder(deep) }
+            precondition(exists(deep.appendingPathComponent("\(chain)/65/leaf.txt")),
+                         "a refused tree keeps every original entry")
+            precondition(isDirectory(lease.readyFile.url), "one refused item cannot disturb a ready neighbour")
+            try checkBytes(lease.readyFile.url.appendingPathComponent("\(chain)/leaf.txt"), Data([5]))
+        }
+    }
+
+    static func folder_symlink_and_special_entries_refused() async throws {
+        try await withFixture { f in
+            let aliased = try f.folder("aliased")
+            try f.write("aliased/kept.txt", Data([7]))
+            try f.write("outside.txt", Data([1]))
+            try f.symlink("aliased/alias.txt", to: f.base.appendingPathComponent("outside.txt"))
+            let aliasOperation = UUID()
+            await refuses(.unsupportedEntry) { try await f.prepareFolder(aliased, operationID: aliasOperation) }
+            precondition(!exists(f.root.appendingPathComponent(aliasOperation.uuidString)))
+            let piped = try f.folder("piped")
+            try f.write("piped/kept.txt", Data([7]))
+            try f.fifo("piped/pipe")
+            let pipeOperation = UUID()
+            await refuses(.unsupportedEntry) { try await f.prepareFolder(piped, operationID: pipeOperation) }
+            precondition(!exists(f.root.appendingPathComponent(pipeOperation.uuidString)))
+            // Refused, not skipped: the entry that caused each refusal is still in the original.
+            try checkBytes(aliased.appendingPathComponent("kept.txt"), Data([7]))
+            try checkBytes(aliased.appendingPathComponent("alias.txt"), Data([1]))
+            try checkBytes(piped.appendingPathComponent("kept.txt"), Data([7]))
+            precondition(exists(piped.appendingPathComponent("pipe")), "a refused FIFO stays in the original tree")
+            let failed = await f.copies.cleanupFailed
+            precondition(!failed, "a refused folder cleans its own partial tree")
+        }
+    }
+
+    static func folder_symlinked_root_and_ancestor_refused() async throws {
+        try await withFixture { f in
+            try f.write("real/tree/kept.txt", Data([7]))
+            let real = f.base.appendingPathComponent("real/tree")
+            let alias = f.base.appendingPathComponent("alias-tree")
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+            let aliasOperation = UUID()
+            await refuses(.invalidSource) { try await f.prepareFolder(alias, operationID: aliasOperation) }
+            let ancestor = f.base.appendingPathComponent("ancestor")
+            try FileManager.default.createSymbolicLink(at: ancestor, withDestinationURL: f.base.appendingPathComponent("real"))
+            let ancestorOperation = UUID()
+            await refuses(.invalidSource) {
+                try await f.prepareFolder(ancestor.appendingPathComponent("tree"), operationID: ancestorOperation)
+            }
+            // A refused root never creates an owned directory at all.
+            precondition(!exists(f.root.appendingPathComponent(aliasOperation.uuidString)))
+            precondition(!exists(f.root.appendingPathComponent(ancestorOperation.uuidString)))
+            try checkBytes(real.appendingPathComponent("kept.txt"), Data([7]))
+        }
+    }
+
+    static func folder_existing_item_directory_refused() async throws {
+        try await withFixture { f in
+            let tree = try f.folder("tree")
+            try f.write("tree/kept.txt", Data([7]))
+            // One real preparation first, so the owned root the foreign claim lands in is real.
+            let seed = try await f.prepareFolder(tree)
+            let operation = UUID()
+            // Pre-claim the exact operation directory this preparation will ask for: publication
+            // refuses an existing name outright, never reuses it and never adds a suffix.
+            let claimed = f.root.appendingPathComponent(operation.uuidString)
+            guard Darwin.mkdir(claimed.path, mode_t(0o700)) == 0 else { throw FilePreparationError.storage }
+            try Data([99]).write(to: claimed.appendingPathComponent("foreign.txt"), options: .withoutOverwriting)
+            await refuses(.alreadyExists) { try await f.prepareFolder(tree, operationID: operation) }
+            try checkBytes(claimed.appendingPathComponent("foreign.txt"), Data([99]))
+            try checkBytes(tree.appendingPathComponent("kept.txt"), Data([7]))
+            await f.copies.remove(itemID: seed.itemID)
+            await f.copies.shutdown()
+            let failed = await f.copies.cleanupFailed
+            precondition(failed, "a foreign operation directory is preserved and reported as failed cleanup")
+            try checkBytes(claimed.appendingPathComponent("foreign.txt"), Data([99]))
+        }
+    }
+
+    static func refused_folder_leaves_no_partial_tree_and_preserves_original() async throws {
+        try await withFixture { f in
+            let tree = try f.folder("tree")
+            try f.write("tree/kept.txt", Data([7]))
+            try f.write("tree/nested/inner.txt", Data([8, 8]))
+            try f.write("outside.txt", Data([1]))
+            try f.symlink("tree/nested/alias.txt", to: f.base.appendingPathComponent("outside.txt"))
+            let before = try snapshot(tree)
+            let operation = UUID()
+            await refuses(.unsupportedEntry) { try await f.prepareFolder(tree, operationID: operation) }
+            precondition(!exists(f.root.appendingPathComponent(operation.uuidString)),
+                         "a refused folder must leave no ready partial tree")
+            let failed = await f.copies.cleanupFailed
+            precondition(!failed, "a refused folder removes the partial tree it did build")
+            let after = try snapshot(tree)
+            precondition(before == after, "the original folder must be preserved completely")
+        }
+    }
+
+    static func revoked_folder_copy_removes_its_partial_tree() async throws {
+        let gate = CopyGate()
+        try await withFixture(checkpoint: { if $0 == .chunk(1) { gate.pause() } }) { f in
+            defer { gate.release() }
+            let tree = try f.folder("tree")
+            try f.write("tree/only.bin", Data(repeating: 4, count: 300_000))
+            let before = try snapshot(tree)
+            let item = UUID(), operation = UUID()
+            let task = Task { try await gate.prepareFolder(f.copies, source: tree, itemID: item, operationID: operation) }
+            try await gate.waitUntilPaused()
+            // A real paused worker really does own a staged tree before it is finished.
+            let owned = f.root.appendingPathComponent(operation.uuidString)
+            let staged = (try? FileManager.default.contentsOfDirectory(atPath: owned.appendingPathComponent("tree").path)) ?? []
+            precondition(staged.contains { $0.hasPrefix(".partial-") }, "a paused folder copy owns a staged payload")
+            let removing = Task { await f.copies.remove(itemID: item) }
+            try await eventually { await f.copies.itemCount == 0 }
+            gate.release()
+            await refuses(.cancelled) { try await task.value }
+            await removing.value
+            precondition(!exists(owned), "a revoked folder copy must remove its partial tree")
+            let after = try snapshot(tree)
+            precondition(before == after, "revoking a folder copy leaves the original tree untouched")
+        }
+    }
+
+    static func folder_cleanup_preserves_foreign_entries_and_reports_failure() async throws {
+        try await withFixture { f in
+            let tree = try f.folder("tree")
+            try f.write("tree/kept.txt", Data([7]))
+            let asset = try await f.prepareFolder(tree), lease = try await f.hold(asset, .drag)
+            let ready = lease.readyFile.url
+            await f.release(lease)
+            // Planted inside a ready tree: neither the new leaf nor the new subtree is registered,
+            // so cleanup must keep both and report failure rather than sweeping them.
+            let leaf = ready.appendingPathComponent("planted.txt")
+            try Data([99]).write(to: leaf, options: .withoutOverwriting)
+            let nested = ready.appendingPathComponent("foreign/leaf.txt")
+            try FileManager.default.createDirectory(at: nested.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try Data([98]).write(to: nested, options: .withoutOverwriting)
+            await f.copies.remove(itemID: asset.itemID)
+            await f.copies.shutdown()
+            let failed = await f.copies.cleanupFailed, owned = await f.copies.ownedCount
+            precondition(failed && owned == 1, "a nonempty foreign tree retains failed cleanup authority")
+            precondition(exists(ready), "the owned folder root stays for its retained handles")
+            try checkBytes(leaf, Data([99])); try checkBytes(nested, Data([98]))
+            try checkBytes(tree.appendingPathComponent("kept.txt"), Data([7]))
+        }
+    }
+
+    static func folder_and_text_ingest_refuse_concurrent_preparation() async throws {
+        let gate = CopyGate()
+        try await withFixture(checkpoint: { if $0 == .chunk(1) { gate.pause() } }) { f in
+            defer { gate.release() }
+            let tree = try f.folder("tree")
+            try f.write("tree/only.bin", Data(repeating: 4, count: 200_000))
+            let item = UUID(), operation = UUID()
+            let task = Task { try await gate.prepareFolder(f.copies, source: tree, itemID: item, operationID: operation) }
+            try await gate.waitUntilPaused()
+            // Folders and text share the one active copy refusal and the item registry:
+            // no ingest queue is introduced for either new kind.
+            await refuses(.busy) { try await f.prepareText(Data("blocked".utf8)) }
+            await refuses(.duplicateOperation) { try await f.prepareText(Data("blocked".utf8), itemID: item) }
+            gate.release()
+            let asset = try await task.value
+            precondition(asset.kind == .folder, "the paused folder preparation still delivers its own kind")
+            let lease = try await f.hold(asset, .transfer)
+            try checkBytes(lease.readyFile.url.appendingPathComponent("only.bin"), Data(repeating: 4, count: 200_000))
+        }
+    }
+
+    static func text_payload_bounds_and_utf8_are_explicit() async throws {
+        try await withFixture { f in
+            let body = Data(String(repeating: "a", count: 1 << 20).utf8)
+            let asset = try await f.prepareText(body, name: "note")
+            precondition(asset.kind == .text && asset.name == "note.txt" && asset.size == UInt64(1 << 20),
+                         "a payload at exactly 1 MiB is admitted as an explicit .txt asset")
+            let lease = try await f.hold(asset, .drag)
+            let stored = try Data(contentsOf: lease.readyFile.url)
+            precondition(stored == body, "the payload is stored exactly as supplied, never truncated")
+            await f.release(lease)
+            await f.copies.remove(itemID: asset.itemID)
+            // One byte over the ceiling and an undecodable payload are both refused explicitly.
+            await refuses(.textTooLarge) { try await f.prepareText(body + Data([97])) }
+            await refuses(.invalidText) { try await f.prepareText(Data([0xFF, 0xFE, 0xFD])) }
+            await refuses(.invalidSource) { try await f.prepareText(Data("x".utf8), name: "../escape") }
+            await f.copies.shutdown()
+            let assets = await f.copies.assetCount, owned = await f.copies.ownedCount
+            let failed = await f.copies.cleanupFailed
+            precondition(assets == 0 && owned == 0 && !failed, "every refused payload leaves no owned state")
+            precondition(!exists(f.root), "a text-only run still cleans its own root")
+        }
+    }
+
+    static func link_is_stored_as_text_and_never_opened() async throws {
+        try await withFixture { f in
+            guard let target = URL(string: "https://example.com/notes/page?q=1#top") else {
+                throw FilePreparationError.storage
+            }
+            let asset = try await f.prepareLink(target)
+            precondition(asset.kind == .link && asset.name == "link.txt"
+                         && asset.size == UInt64(target.absoluteString.utf8.count),
+                         "a link is a distinct kind stored as its own URL text")
+            let lease = try await f.hold(asset, .drag)
+            let stored = try Data(contentsOf: lease.readyFile.url)
+            // The only bytes that exist are the URL the user supplied. Nothing in the owner
+            // resolves, fetches, or launches a link, so there is nothing else to assert.
+            precondition(String(data: stored, encoding: .utf8) == target.absoluteString,
+                         "a link payload must be exactly the supplied URL text")
+            await f.release(lease)
+            await f.copies.remove(itemID: asset.itemID)
+            try checkBytes(f.source, f.expected)
+        }
+    }
+
     private static func withFixture(checkpoint: (@Sendable (FilePreparationCheckpoint) -> Void)? = nil,                                    _ body: @MainActor (ShelfFixture) async throws -> Void) async throws {
         diagnostic("SETUP shelf_exclusive_fixture")
         let f = try ShelfFixture(checkpoint: checkpoint)
@@ -478,6 +766,44 @@ private final class ShelfFixture {
         diagnostic("COPY shelf_prepare")
         return try await copies.prepareShelf(source: source, itemID: itemID, operationID: operationID)
     }
+    func prepareFolder(_ folder: URL, itemID: UUID = UUID(), operationID: UUID = UUID()) async throws -> ShelfAsset {
+        diagnostic("COPY shelf_prepare_folder")
+        return try await copies.prepareShelf(.folder(folder), itemID: itemID, operationID: operationID)
+    }
+    func prepareText(_ bytes: Data, name: String = "note",
+                     itemID: UUID = UUID(), operationID: UUID = UUID()) async throws -> ShelfAsset {
+        diagnostic("COPY shelf_prepare_text")
+        return try await copies.prepareShelf(.text(bytes: bytes, name: name), itemID: itemID, operationID: operationID)
+    }
+    func prepareLink(_ link: URL, itemID: UUID = UUID(), operationID: UUID = UUID()) async throws -> ShelfAsset {
+        diagnostic("COPY shelf_prepare_link")
+        return try await copies.prepareShelf(.link(link), itemID: itemID, operationID: operationID)
+    }
+    /// Synthetic source trees live under the fixture base only, never inside the owned
+    /// copy root, so a prepared item can never contain the owner's own state.
+    @discardableResult
+    func folder(_ relative: String) throws -> URL {
+        let url = base.appendingPathComponent(relative)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    @discardableResult
+    func write(_ relative: String, _ bytes: Data) throws -> URL {
+        let url = base.appendingPathComponent(relative)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try bytes.write(to: url, options: .withoutOverwriting)
+        return url
+    }
+    func symlink(_ relative: String, to target: URL) throws {
+        let url = base.appendingPathComponent(relative)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+    }
+    func fifo(_ relative: String) throws {
+        let url = base.appendingPathComponent(relative)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard Darwin.mkfifo(url.path, mode_t(0o600)) == 0 else { throw FilePreparationError.storage }
+    }
     func hold(_ asset: ShelfAsset, _ purpose: ShelfLeasePurpose) async throws -> ShelfLease {
         let lease = try await copies.acquire(assetID: asset.assetID, purpose: purpose)
         leases.insert(lease.leaseID)
@@ -512,6 +838,11 @@ private final class CopyGate: @unchecked Sendable {
         defer { signal(paused: false) }
         return try await copies.prepareShelf(source: source, itemID: itemID, operationID: operationID)
     }
+    func prepareFolder(_ copies: FilePreparation, source: URL,
+                       itemID: UUID, operationID: UUID) async throws -> ShelfAsset {
+        defer { signal(paused: false) }
+        return try await copies.prepareShelf(.folder(source), itemID: itemID, operationID: operationID)
+    }
     func acquire(_ copies: FilePreparation, assetID: UUID) async throws -> ShelfLease {
         defer { signal(paused: false) }
         return try await copies.acquire(assetID: assetID, purpose: .drag)
@@ -543,6 +874,27 @@ private final class CopyGate: @unchecked Sendable {
 }
 
 private func exists(_ url: URL) -> Bool { var info = stat(); return Darwin.lstat(url.path, &info) == 0 }
+private func isDirectory(_ url: URL) -> Bool {
+    var info = stat()
+    return Darwin.lstat(url.path, &info) == 0 && (UInt32(info.st_mode) & UInt32(S_IFMT)) == UInt32(S_IFDIR)
+}
+/// Relative name → content for a whole tree, so an original is compared entry by entry
+/// before and after an ingest instead of through one spot check.
+private func snapshot(_ root: URL) throws -> [String: String] {
+    var found: [String: String] = [:]
+    guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+        throw FilePreparationError.storage
+    }
+    for case let url as URL in walker {
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+        let relative = String(url.path.dropFirst(root.path.count + 1))
+        if values?.isDirectory == true { found[relative] = "directory" }
+        else if values?.isRegularFile == true { found[relative] = try Data(contentsOf: url).base64EncodedString() }
+        else { found[relative] = "other" }
+    }
+    return found
+}
+
 private func checkBytes(_ url: URL, _ expected: Data) throws {
     let actual = try Data(contentsOf: url)
     precondition(actual == expected, "synthetic bytes must remain unchanged")
