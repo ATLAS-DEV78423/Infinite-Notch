@@ -253,9 +253,24 @@ cleanup. There are 22 top-level cases plus a named nested base subcheck. Fresh
 109 Node checks, shell syntax, whitespace and source review passed; actual Swift
 execution/builds of this repair remain required. No safety flag was relaxed.
 
+### Verified follow-on: `76b4ee2`
+
+2026-10-05. Exact source `76b4ee2f3f3b4344ad38605a87c0dac795306e2a`.
+[Mac run 37306093916](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37306093916)
+completed **success**: five original checks, 21 hover cases, **22 preparation
+cases** (including the nested trusted-base/default-root subcheck), and unsigned
+NotchBuddy Debug, CoucouAppStore Debug and NotchBuddy Release. The trusted-base
+repair's real native suite is now GREEN, not just source-reviewed.
+[Tauri run 37306093879](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37306093879)
+also completed **success**, both Windows/Linux full jobs. Existing source warnings
+are not reclassified as absent; hosted passes remain compiler/fixture evidence.
+
+Both running watchers completed. Planning the remaining features does not repeat
+these jobs or declare interactive/sandbox/crash/export/signing acceptance complete.
+
 ## Still not qualified
 
-Mac native hover/input acceptance and the full owned-preparation suite;
+Mac native hover/input, sandbox and real owned-preparation interaction acceptance;
 Windows broad reparse/restart cleanup and native command/OLE/Explorer delivery
 beyond the passing hosted copy/workspace/build fixtures;
 rich agent sources/ingress/lifetime and SwiftUI Details;

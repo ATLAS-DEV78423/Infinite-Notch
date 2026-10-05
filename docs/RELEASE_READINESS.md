@@ -37,6 +37,14 @@ Load `omnirush-swarm` before any batch of three or more implementation agents.
 
 ## Execution order
 
+The [remaining-feature execution plan](superpowers/plans/2026-10-05-remaining-features.md)
+now routes all 53 feature/settings rows to concrete work packages, including a
+[detailed shelf plan](superpowers/plans/2026-10-05-temporary-shelf.md) and
+[native capability gates](superpowers/plans/2026-10-05-platform-capability-gates.md).
+These new plans await review. Latest native build/test source `76b4ee2` passes
+Mac 21 hover / 22 preparation cases and all three unsigned builds, plus both
+Windows/Linux full lanes; real device and complete-feature gates remain separate.
+
 Each downstream subsystem gets its own concrete file/interface/test plan before
 implementation. Do not invent API contracts before their capability gates pass.
 This map sequences the entire approved scope; the
