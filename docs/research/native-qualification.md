@@ -228,11 +228,37 @@ completed **success** for the same SHA: Windows and Linux full lanes passed.
 The interrupted fix's applied files were preserved and its missing diagnostic/
 report remainder resumed; no old run or completed implementation was repeated.
 
+### Trusted-base diagnostic and repair after `b771cc8`
+
+At `b771cc84a6e644ccad1442e108b83b4d5c919d68`,
+[Mac run 37301891212](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37301891212)
+again passed all app builds and 21 hover cases. The readiness frame case now
+passed, but the first basic actor copy failed `invalidSource` **before source
+fstat**, not inside publication or a barrier. No full preparation GREEN exists
+at this revision. [Tauri run 37301891200](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37301891200)
+passed both complete platform lanes.
+
+The traced cause is Apple's documented `URL.resolvingSymlinksInPath` behavior:
+it can strip `/private`, recreating the `/var` or `/tmp` system alias that the
+no-follow directory walk correctly rejects. The test fixture and trusted
+Darwin-selected production temp base used that helper. The narrow repair uses
+POSIX `realpath` with balanced freeing **only for those trusted bases**. Selected
+source URLs and caller-supplied actor roots remain unnormalized and no-follow.
+Primary contract: [Apple URL resolver](https://developer.apple.com/documentation/foundation/nsurl/resolvingsymlinksinpath).
+
+The real native default-root regression checks canonical ancestors, exact
+synthetic copies and owned shutdown. Review corrected its cleanup so failed
+prepare/read paths await shutdown before throwing, and assertions occur after
+cleanup. There are 22 top-level cases plus a named nested base subcheck. Fresh
+109 Node checks, shell syntax, whitespace and source review passed; actual Swift
+execution/builds of this repair remain required. No safety flag was relaxed.
+
 ## Still not qualified
 
-Mac full-hover/delay/independent holds and owned asynchronous/truthful preparation;
-Windows corrected success publication, reparse/restart cleanup and native command/
-OLE/Explorer delivery; rich agent sources/ingress/lifetime and SwiftUI Details;
+Mac native hover/input acceptance and the full owned-preparation suite;
+Windows broad reparse/restart cleanup and native command/OLE/Explorer delivery
+beyond the passing hosted copy/workspace/build fixtures;
+rich agent sources/ingress/lifetime and SwiftUI Details;
 the full multi-item shelf/LocalSend/media/system/calendar/extras scope.
 
 Actual notched/notchless displays, minimum supported OS, desktop Windows 10/11,
