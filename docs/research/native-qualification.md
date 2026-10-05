@@ -205,6 +205,29 @@ clearing. Mac abnormal-exit reaping and export/consumer exit leases are **not**
 implemented or qualified by this candidate. Sandbox grants, real input, slow
 disk/cancel/permission loss and hardware/accessibility remain required.
 
+### Mac preparation candidate result: `3f0ab1d`
+
+Exact source `3f0ab1d831c7ff5292b562ac19ecc47d8d45c9cb`.
+[Mac run 37235374610](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37235374610)
+passed all three unsigned app builds, five prior checks and 21 hover cases, but
+the native preparation binary failed a real-worker barrier assertion (exit 133).
+No complete preparation-suite GREEN is claimed. Buffered output did not identify
+the failing case/error; fixed, content-free test diagnostics now name the current
+case and real setup/checkpoint stage before any assertion trap.
+
+Central review also identified a separate path-usability gap between native
+publication and receipt delivery. The applied narrow follow-up revalidates the
+actual ready namespace/content after publication; an actual-worker ancestor-swap
+test verifies refusal rather than delivery through a substituted namespace.
+It does not grant path-based cleanup or claim continuous hostile same-user race
+protection after the final check. This change and the now-22-case diagnostic suite
+still require their own actual native result.
+
+[Tauri run 37235374615](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37235374615)
+completed **success** for the same SHA: Windows and Linux full lanes passed.
+The interrupted fix's applied files were preserved and its missing diagnostic/
+report remainder resumed; no old run or completed implementation was repeated.
+
 ## Still not qualified
 
 Mac full-hover/delay/independent holds and owned asynchronous/truthful preparation;

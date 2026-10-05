@@ -36,6 +36,10 @@ Build-only hosted results are recorded in
 21 hover cases and three unsigned builds and Linux's full lane passed; Windows's
 standalone lane was 10/11, so its later builds were skipped. These are not native
 UI, hardware, signing or release-qualification receipts.
+At `0331a4f`, the corrected Windows fixture and new held-writer refusal case
+passed (12 standalone / 26 app-library / 10 relay), and both Windows/Linux full
+build lanes succeeded. Mac preparation's no-I/O readiness test failed as intended;
+the subsequent owned-copy source still needs its own native GREEN/build receipt.
 
 Requires Node/npm, Rust/Cargo and the native Tauri 2 prerequisites for the target
 OS. The relay is built by the package's existing predev/prebuild hooks.

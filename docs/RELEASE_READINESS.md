@@ -14,6 +14,12 @@ The [foundation receipt](research/notch-foundation-verification.md) describes
 implemented Tauri/Linux work, not completed Mac/Windows parity. The
 [agent receipt](research/agent-inspector-verification.md) likewise remains partial.
 
+Update 2026-10-05: [actual native qualification](research/native-qualification.md)
+records Mac hover/compiler coverage and full Windows/Linux test/build success at
+`0331a4f`. Mac owned preparation was implemented only after its real readiness
+RED; its new source/build gate is separate. These checks do not qualify the
+interactive foundation, crash reaping, export leases or the full release.
+
 A feature is complete only when its real user path passes on its requested
 platforms, including denial/error/cancel, keyboard/screen-reader operation,
 reduced motion and concurrent approvals. Unknown fields stay unavailable. A
@@ -106,8 +112,8 @@ Add a revision/run/device receipt before changing a row to qualified.
 
 | Feature | Stage | Current evidence / required acceptance |
 | --- | --- | --- |
-| Expand on hover | 1 | Partial Tauri; Mac parity and both native travel/focus cases pending |
-| Delayed open | 1 | Partial Tauri; exact 0–1000 ms, stale timer and independent holds on both shells |
+| Expand on hover | 1 | Both shells authored; Mac 21-case pure FSM and unsigned builds pass; native travel/focus cases pending |
+| Delayed open | 1 | Both shells authored/pure-tested for 0–1000 ms, stale timers and independent holds; actual native input qualification pending |
 | Now-playing display | 5 | Existing Mac Music-only path; named sources/Windows metadata pending |
 | Playback controls | 5 | Existing limited Music controls; target-source confirmation and seek boundaries |
 | Audio visualizer | 5 | Pending decorative playback wave; paused/hidden/reduced-motion stop |
