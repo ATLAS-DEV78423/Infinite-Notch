@@ -104,7 +104,31 @@ Portable re-checks after the fixes: 109 Node TS/MJS tests, 66 Python relay tests
 `tsc --noEmit`, `vite build`, `bash -n` on all 13 scripts, and workflow YAML parse.
 Swift and Rust remain unexecuted locally.
 
-### Observed at `73f8637`: Mac GREEN, Rust compile RED
+### Observed at `e459c9f`: S1a native GREEN on all three targets
+
+| Revision | Run | Result |
+| --- | --- | --- |
+| `73f8637` | [Mac 37337616989](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37337616989) | **Passed** — 13 geometry, 15 safe-links, 21 hover, 23 preparation, 3 unsigned builds |
+| `901ba79` | [Mac 37342946271](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37342946271) | Failed — Swift `UInt8 has no isASCII` in the new event-name guard |
+| `a133c2a` | [Mac 37344552452](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37344552452) | **Passed** |
+| `a133c2a` | [Tauri 37344552360](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37344552360) | Rust compiled; 40/41 passed, one wrong assertion of mine |
+| `e459c9f` | [Tauri 37345411989](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37345411989) | **Passed** — Windows and Linux: standalone copy suites (12 / 22), release relay, `cargo test --workspace --locked`, and full Tauri builds |
+
+Four consecutive honest RED→GREEN cycles, each failure diagnosed from the actual log
+rather than guessed: a moved value, a `Display` that does not exist, a `UInt8`
+method that does not exist, and an assertion aimed at the wrong operation. No safety
+property was weakened and no gate was skipped to reach green.
+
+**What this qualifies:** the S1a native registry contract on macOS, Windows and
+Linux — prepare/acquire/release/remove/shutdown lifetimes, the 32-asset and 32-lease
+fail-closed bounds, namespace substitution refusal, foreign-entry preservation, and
+the compile/lock state of both shells.
+
+**What it does not qualify:** any folder, image or text ingest (S1b), restart/crash
+reaping (S1c), shelf UI or model (S2), real Finder/Explorer/Mail/share consumer
+lifetimes (S3), LocalSend, media/system/calendar features, sandbox, accessibility,
+performance, or any distribution step. The Rust shelf still has no IPC surface, so
+its security review covers the internal API rather than a real untrusted boundary.
 
 [Mac run 37337616989](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37337616989)
 **passed**: 13 screen-geometry, 15 safe-links, 21 hover FSM, **23 file-preparation**
@@ -113,7 +137,7 @@ cases (including the 23rd lifetime case through a registered native lease),
 native GREEN for S1a on macOS: Swift 6 strict-concurrency compiles and every
 owned-root assertion passes. It is not release, device or consumer acceptance.
 
-[Tauri run 37337617031](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37337617031)
+
 **failed to compile** on both Windows and Linux at one shared cause:
 `error[E0382]: borrow of moved value: operation` at `files.rs:793`, introduced by a
 review-round edit that asserted on `operation` after `begin_shelf(item, operation)`
