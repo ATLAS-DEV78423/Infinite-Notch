@@ -433,7 +433,7 @@ pub fn run() {
                 // otherwise a planted entry or a missing /proc silently disables
                 // file preparation for the whole session with no diagnostic.
                 if let Err(error) = copies.startup() {
-                    log::line(format!("Abandoned-copy cleanup unavailable: {error}"));
+                    log::line(format!("Abandoned-copy cleanup unavailable: {}", error.message()));
                 }
             });
             tray::build(&handle)?;

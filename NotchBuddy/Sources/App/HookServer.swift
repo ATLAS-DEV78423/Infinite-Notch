@@ -545,8 +545,8 @@ final class HookServer: @unchecked Sendable {
     /// An event name is short and identifier-shaped by construction. Anything
     /// else is agent-authored free text and must never reach a log line.
     private static func plainEventName(_ name: String) -> Bool {
-        !name.isEmpty && name.utf8.count <= 48
-            && name.utf8.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" as UInt8) }
+        !name.isEmpty && name.count <= 48
+            && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }
     }
 
     // Direct socket clients need the relay allowlist too. This does not replace

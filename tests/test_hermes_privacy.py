@@ -58,9 +58,9 @@ class PrivacyTests(unittest.TestCase):
     def test_builder_reads_only_allowlisted_mapping_keys_without_copying(self):
         metadata = Metadata(session_id="ses1", cwd="/repo", tool_name="bash")
         self.assertEqual(adapter.build_payload("PreToolUse", metadata=metadata), {
-            "hook_event_name": "PreToolUse", "coucou_agent": "hermes", "session_id": "ses1", "cwd": "/repo", "tool_name": "bash",
+            "hook_event_name": "PreToolUse", "coucou_agent": "hermes", "session_id": "ses1", "tool_name": "bash",
         })
-        self.assertEqual(metadata.accesses, ["session_id", "cwd", "tool_name"])
+        self.assertEqual(metadata.accesses, ["session_id", "tool_name"])
 
     def test_missing_or_invalid_identity_is_dropped_without_truncation(self):
         for identity in (None, "", {}, 8, "bad\nidentity", "\u007f", "\u0085", "\ud800", "\udfff", "é" * 129, "🐾" * 65):
@@ -76,13 +76,17 @@ class PrivacyTests(unittest.TestCase):
                     "hook_event_name": "SessionStart", "coucou_agent": "hermes", "session_id": identity,
                 })
 
-    def test_cwd_is_explicit_and_bounded_utf8_without_process_fallback(self):
+    def test_cwd_is_never_forwarded_and_never_inferred_from_process(self):
+        # No Hermes hook payload carries a trustworthy session directory, and a host
+        # supplied one is agent-authored, so cwd is never emitted. Unavailable is the
+        # honest answer, and it is never inferred from the process either.
         with patch.object(adapter.os, "getcwd", side_effect=AssertionError("Process cwd is forbidden")):
-            for cwd in (None, "", {}, "relative", "/bad\npath", "/\ud800", "/" + "é" * 512):
+            cases = (None, "", {}, "relative", "/bad\npath", "/\ud800",
+                     "/repo", "C:\\repo", "/repo/inner", " " * 40)
+            for cwd in cases:
                 with self.subTest(cwd=repr(cwd)):
                     self.assertNotIn("cwd", adapter.build_payload("SessionStart", metadata={"session_id": "ses1", "cwd": cwd}))
-        for cwd in ("/repo/日本語", "C:\\repo", "/" + "é" * 511 + "a"):
-            self.assertEqual(adapter.build_payload("SessionStart", metadata={"session_id": "ses1", "cwd": cwd})["cwd"], cwd)
+            self.assertNotIn("cwd", adapter.build_payload("SessionStart", metadata={"session_id": "ses1"}))
 
     def test_tool_labels_are_bounded_generic_metadata_not_command_previews(self):
         for name in (None, "", {}, "bash --token=PRIVATE", "é" * 129):
@@ -190,7 +194,7 @@ Path(os.environ["COUCOU_CAPTURE"], str(os.getpid()) + ".json").write_text(json.d
             captures.sort(key=lambda item: item["args"][-1])
             expected = []
             for _, _, event in sorted(cases, key=lambda item: item[2]):
-                packet = {"hook_event_name": event, "coucou_agent": "hermes", "session_id": "ses1", "cwd": "/repo", "tool_name": "bash"}
+                packet = {"hook_event_name": event, "coucou_agent": "hermes", "session_id": "ses1", "tool_name": "bash"}
                 expected.append({"args": ["--agent", "hermes", event], "input": json.dumps(packet) + "\n"})
             self.assertEqual(captures, expected)
             self.assertIs(inputs["args"], forbidden)
@@ -295,7 +299,7 @@ Path({directory!r}, str(os.getpid()) + '.json').write_text(sys.stdin.read())
                     captures = [json.loads(file.read_text()) for file in path.glob("*.json")]
                     captures.sort(key=lambda value: value["hook_event_name"])
                     self.assertEqual(captures, [
-                        {"hook_event_name": event, "coucou_agent": "hermes", "session_id": "ses1", "cwd": "/repo", "tool_name": "bash"}
+                        {"hook_event_name": event, "coucou_agent": "hermes", "session_id": "ses1", "tool_name": "bash"}
                         for event in ("SessionStart", "Stop")
                     ])
                     log.assert_not_called()
