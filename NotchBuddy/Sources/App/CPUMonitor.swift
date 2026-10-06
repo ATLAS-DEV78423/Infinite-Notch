@@ -138,12 +138,16 @@ actor CPUMonitor {
     ///    snapshot) has no comparable baseline;
     ///  * a delta of zero total ticks means no elapsed CPU time was observed at all.
     static func loadPercentage(previous: CPUTicks, current: CPUTicks) -> Double? {
+        // A reset is detected by COMPARING, before any subtraction: UInt64 arithmetic traps
+        // on underflow, so `current.x - previous.x >= 0` cannot detect it — it crashes first,
+        // and the compiler proved it by flagging that guard as unreachable.
+        guard current.user >= previous.user, current.system >= previous.system,
+              current.idle >= previous.idle, current.nice >= previous.nice else { return nil }
         // Broken into locals: the one-expression form exceeds the type-checker's budget.
         let user = current.user - previous.user
         let system = current.system - previous.system
         let idle = current.idle - previous.idle
         let nice = current.nice - previous.nice
-        guard user >= 0, system >= 0, idle >= 0, nice >= 0 else { return nil } // Counter reset.
         let busy = user + system + nice
         let total = busy + idle
         guard total > 0 else { return nil }

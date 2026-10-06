@@ -449,8 +449,12 @@ enum ShelfStorageTests {
                          "an empty local directory must survive in the copied tree")
             precondition(exists(tree.appendingPathComponent("nested/inner/deep.bin")),
                          "the original folder is never owned by the copy")
+            // Releasing a lease is not removing the item: the shelf row still exists, so native
+            // keeps the tree. Removal revokes, and the last release after removal disposes.
             await f.release(lease)
-            precondition(!exists(ready), "last release must remove the whole owned tree")
+            precondition(exists(ready), "a released lease alone never deletes an item still on the shelf")
+            await f.copies.remove(itemID: asset.itemID)
+            precondition(!exists(ready), "last release after removal must remove the whole owned tree")
             try checkBytes(tree.appendingPathComponent("nested/inner/deep.bin"), Data([9, 9, 9]))
         }
     }

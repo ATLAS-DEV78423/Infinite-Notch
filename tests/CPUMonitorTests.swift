@@ -43,8 +43,11 @@ enum CPUMonitorTests {
     // MARK: - Pure arithmetic: no Mach call anywhere in this section
 
     static func idle_equals_total_ticks_is_zero_percent() throws {
+        // Only idle advances: Δuser 0, Δsystem 0, Δnice 0, Δidle 850, so busy share is 0.
+        // The old fixture also advanced user/system, which is 300/1150 = 26%, not an
+        // all-idle delta at all: the case asserted a property its own vector never had.
         let previous = CPUTicks(user: 100, system: 50, idle: 850, nice: 0)
-        let current = CPUTicks(user: 300, system: 150, idle: 1_700, nice: 0)
+        let current = CPUTicks(user: 100, system: 50, idle: 1_700, nice: 0)
         precondition(CPUMonitor.loadPercentage(previous: previous, current: current) == 0,
                      "idle_equals_total_ticks_is_zero_percent: an all-idle delta is exactly 0%")
     }
