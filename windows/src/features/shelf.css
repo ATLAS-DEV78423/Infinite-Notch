@@ -1,0 +1,260 @@
+/* File shelf — the shelf card, its tiles and the compact-island indicator.
+   Scoped to .shelf-* so nothing here bleeds into a view that already ships. The
+   shared .view / .card / .stack / .row / .btn / .drop-frame classes and the app
+   palette (--card, --dim, --red-text, --amber, --cyan) are reused as-is; no
+   second palette is introduced and no existing rule is overridden. */
+
+.shelf-card .stack {
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 10px 18px 14px;
+}
+
+.shelf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shelf-count {
+  font: 400 10.5px var(--mono);
+  color: var(--dim-3);
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Live region for a shelf-wide refusal and for the capacity notice. It stays in
+   the rendered tree (and keeps its line) while empty: a live region that is
+   `display: none` at the moment its text appears is not reliably announced. */
+.shelf-banner {
+  font: 500 11px/14px var(--font);
+  min-height: 14px;
+}
+
+.shelf-banner.error {
+  color: var(--red-text);
+}
+
+.shelf-banner.warn {
+  color: var(--amber);
+}
+
+.shelf-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.shelf-toggle {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.shelf-controls .shelf-toggle[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--ink);
+}
+
+/* ── Items ────────────────────────────────────────────────────────────────── */
+
+.shelf-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
+  scrollbar-width: thin;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 8px;
+  align-content: start;
+}
+
+.shelf-tile {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 5px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--hairline);
+}
+
+.shelf-tile[aria-disabled="true"] {
+  opacity: 0.5;
+}
+
+.shelf-tile:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.shelf-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--dim-2);
+}
+
+/* Native supplies a real data: URL or nothing at all — never a placeholder. */
+.shelf-thumb-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.shelf-text {
+  min-width: 0;
+}
+
+.shelf-name {
+  font: 500 12px var(--font);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shelf-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.shelf-size {
+  font: 400 10.5px var(--mono);
+  color: var(--dim-3);
+}
+
+/* Caption for a row that arrived over the network: a reference, not a copy the
+   user owns, so it also carries no remove affordance. */
+.shelf-received {
+  font: 400 9.5px var(--font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim-4);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+
+.shelf-error {
+  grid-column: 1 / -1;
+  font: 400 10.5px/1.35 var(--font);
+  color: var(--red-text);
+  overflow-wrap: anywhere;
+}
+
+.shelf-tile-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+}
+
+.shelf-act {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+
+.shelf-act:disabled {
+  opacity: 0.35;
+}
+
+/* Deliberately not a red "Delete": this row only leaves the shelf, and what
+   native does with the bytes afterwards is not something the view can know. */
+.shelf-tile-actions .shelf-remove {
+  margin-left: auto;
+  background: transparent;
+  color: var(--dim-3);
+}
+
+.shelf-tile-actions .shelf-remove:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
+}
+
+.shelf-note {
+  padding: 6px 2px 0;
+}
+
+/* ── Drop zone ────────────────────────────────────────────────────────────── */
+
+/* `.drop-frame` already draws the marching dashes; only the highlight is new. */
+.shelf-card.over {
+  background: radial-gradient(200px 200px at 50% 100%, rgba(34, 197, 94, 0.13), transparent 70%),
+    var(--card);
+}
+
+.shelf-card.over .shelf-frame rect {
+  stroke: rgba(34, 197, 94, 0.65);
+  animation: dash-march 1.1s linear infinite;
+}
+
+/* Author display rules beat the UA `[hidden]` rule, so restate it per element. */
+.shelf-list[hidden],
+.shelf-note[hidden],
+.shelf-received[hidden],
+.shelf-error[hidden],
+.shelf-indicator[hidden] {
+  display: none;
+}
+
+/* ── Compact-island indicator (288 × 32) ──────────────────────────────────── */
+
+.shelf-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  overflow: hidden;
+}
+
+.shelf-indicator-art {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+}
+
+.shelf-indicator-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.shelf-indicator-dot {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(28px 28px at 50% 50%, var(--dim-5), rgba(0, 0, 0, 0) 70%);
+}
+
+.shelf-indicator-count {
+  font: 500 11.5px var(--font);
+  color: var(--dim);
+}
+
+/* The decorative dash march follows the same motion switch as the rest of the
+   island. */
+@media (prefers-reduced-motion: reduce) {
+  .shelf,
+  .shelf *,
+  .shelf-indicator,
+  .shelf-indicator * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -1,0 +1,193 @@
+/* System HUD and status. Scoped to .system-* — nothing here restyles the shell. */
+
+.system-hud-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.system-hud-stack {
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.system-hud-glyph {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  color: var(--ink);
+}
+
+.system-hud-value {
+  font: 600 15px var(--font);
+  font-variant-numeric: tabular-nums;
+}
+
+.system-hud-bar {
+  position: relative;
+  width: 168px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.system-hud-bar[hidden] {
+  display: none;
+}
+
+.system-hud-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: inherit;
+  background: var(--ink);
+  transition: width 0.12s linear;
+}
+
+.system-hud.is-muted .system-hud-fill {
+  background: var(--dim-4);
+}
+
+.system-hud:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -2px;
+}
+
+/* ── Status strip ─────────────────────────────────────────────────────────── */
+
+.system-status-card {
+  display: flex;
+}
+
+.system-status-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.system-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 400 12px var(--font);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.system-chip[hidden] {
+  display: none;
+}
+
+.system-chip.system-battery.is-charging,
+.system-indicator-battery.is-charging {
+  color: var(--green);
+}
+
+.system-privacy {
+  color: var(--red-text);
+}
+
+.system-privacy.is-live .system-live-dot {
+  background: var(--red);
+}
+
+.system-status-detail {
+  min-height: 15px;
+  margin-top: 4px;
+}
+
+.system-cpu-toggle[aria-pressed="true"] {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.system-cpu-toggle:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+/* ── Compact-island indicator (288×32) ────────────────────────────────────── */
+
+.system-indicator {
+  width: 288px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  font: 400 12px var(--font);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.system-indicator-date {
+  white-space: nowrap;
+}
+
+.system-indicator-battery {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.system-indicator-battery[hidden] {
+  display: none;
+}
+
+.system-indicator-bar {
+  position: relative;
+  width: 34px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.system-indicator-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: inherit;
+  background: currentColor;
+}
+
+/* ── Plug / unplug (spec row 14) ──────────────────────────────────────────── */
+
+@keyframes system-plug-in {
+  0% { transform: scale(1); opacity: 1; }
+  35% { transform: scale(1.18); opacity: 0.55; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes system-plug-out {
+  0% { transform: scale(1); opacity: 1; }
+  35% { transform: scale(0.84); opacity: 0.55; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.system-chip.system-plug-in,
+.system-indicator-battery.system-plug-in {
+  animation: system-plug-in 900ms ease-out;
+  color: var(--green);
+}
+
+.system-chip.system-plug-out,
+.system-indicator-battery.system-plug-out {
+  animation: system-plug-out 900ms ease-out;
+  color: var(--dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .system-hud-fill,
+  .system-chip.system-plug-in,
+  .system-indicator-battery.system-plug-in,
+  .system-chip.system-plug-out,
+  .system-indicator-battery.system-plug-out {
+    animation: none;
+    transition: none;
+  }
+}

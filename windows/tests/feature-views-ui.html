@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Notch feature views self-test</title>
+<style>
+  body{background:#202127!important;overflow:auto!important}
+  #results{position:absolute;top:340px;left:24px;right:24px;white-space:pre-wrap;font:12px/1.45 monospace;color:#c8ccd4}
+  #results .pass{color:#34d399}#results .fail{color:#f4505e}
+  #controls{position:absolute;top:300px;left:40px;right:24px;display:flex;flex-wrap:wrap;gap:6px}
+</style>
+<div id="root"></div><div id="controls"></div><pre id="results">RED — loading production feature views…</pre>
+<script type="module">
+import '../src/style.css';
+const results = document.getElementById('results');
+try {
+  const { run } = await import('./feature-views-ui.ts');
+  await run(results);
+} catch (error) {
+  results.textContent += '\nFAIL — ' + (error instanceof Error ? error.message : 'feature views/self-tests unavailable');
+}
+</script></html>

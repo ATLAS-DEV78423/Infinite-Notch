@@ -19,6 +19,11 @@ import { UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
+import { buildMediaIndicator } from "../features/media";
+import { buildSystemIndicator } from "../features/system";
+import { buildShelfIndicator } from "../features/shelf";
+import { buildTransferIndicator } from "../features/transfers";
+import { transfersStore } from "../features/transfers";
 
 const BOT_OVERHANG = 40;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
@@ -47,6 +52,9 @@ export class Island {
   private header!: ViewHost;
   private views!: Map<IslandViewName, ViewHost>;
   private uploadCanvas!: UploadCanvas;
+  /** Compact-island live chips that expand into the feature views. */
+  private statusRail!: HTMLElement;
+  private railSyncs: Array<() => void> = [];
 
   private width = new Tracked(NOTCH_W);
   private height = new Tracked(0);
@@ -197,6 +205,8 @@ export class Island {
     for (const v of this.views.values()) this.viewsEl.append(v.el);
     this.contentEl = h("div", { id: "content" }, this.header.el, this.viewsEl);
 
+    this.statusRail = this.buildStatusRail();
+
     // The drop sequence draws the card, the bar and its own Mochi. It sits under
     // the header, which stays visible on top of it exactly as on macOS.
     this.uploadCanvas = new UploadCanvas({
@@ -218,6 +228,7 @@ export class Island {
       "div",
       { id: "island", tabindex: 0, role: "region", "aria-label": "Coucou" },
       this.clipEl,
+      this.statusRail,
       this.botGlow,
       this.botCanvas,
       this.miniGrid,
@@ -234,8 +245,57 @@ export class Island {
     this.applyGeometry();
   }
 
-  // ── FSM ─────────────────────────────────────────────────────────────────────
+  /**
+   * Compact-island live chips. Each one holds a feature's own indicator and
+   * expands into that feature's view when clicked, so the new features get a
+   * navigation entry point without touching the header or the overview — both of
+   * which ship as-is and must not be restyled.
+   *
+   * An incoming transfer consent request outranks the rail: it takes the island
+   * over on its own, because a declined-by-timeout request is unrecoverable.
+   */
+  private buildStatusRail(): HTMLElement {
+    const rail = h("div", { id: "status-rail" });
+    this.railSyncs = [];
 
+    const chip = (
+      view: IslandViewName,
+      label: string,
+      build: () => { el: HTMLElement; sync: () => void },
+    ) => {
+      const indicator = build();
+      this.railSyncs.push(indicator.sync);
+      const button = h(
+        "button",
+        {
+          class: "rail-chip",
+          type: "button",
+          title: label,
+          "aria-label": label,
+          onclick: () => this.setView(view),
+        },
+        indicator.el,
+      );
+      rail.append(button);
+      return button;
+    };
+
+    chip("transferProgress", "Transfers", buildTransferIndicator);
+    chip("nowPlaying", "Now playing", buildMediaIndicator);
+    chip("systemStatus", "System status", buildSystemIndicator);
+    chip("shelf", "Shelf", buildShelfIndicator);
+
+    transfersStore.subscribe((urgent) => {
+      if (urgent) this.syncStatusRail();
+    });
+    return rail;
+  }
+
+  private syncStatusRail() {
+    for (const sync of this.railSyncs) sync();
+  }
+
+  // ── FSM ─────────────────────────────────────────────────────────────────────
   private wireFsm() {
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
     this.fsm.hoverOpenDelayMs = State.settings.hoverOpenDelayMs;
@@ -895,6 +955,9 @@ export class Island {
 
     tickMiniBots(this.reducedMotion.matches ? 0 : dt);
     this.views.get(State.view)?.tick?.(nowMs);
+    // The rail is compact-only, so its indicators stop syncing once expanded.
+    // Nothing decorative runs while the island is hidden (0% CPU contract).
+    if (State.mode === "compact") this.syncStatusRail();
     if (UploadSeq.isActive) this.stepSequence();
     this.updateCountdown(nowMs);
 
@@ -1043,6 +1106,13 @@ export class Island {
     // Compact mini grid
     const showGrid = State.mode === "compact";
     this.miniGrid.style.opacity = showGrid ? "1" : "0";
+
+    // The status rail shares the compact slot: it only takes pointer events when
+    // it is actually visible, so a hidden island can never swallow a click.
+    const showRail = showGrid && !this.uploadActive;
+    this.statusRail.style.opacity = showRail ? "1" : "0";
+    this.statusRail.style.pointerEvents = showRail ? "auto" : "none";
+
     if (showGrid) {
       const others = State.otherTasks.slice(0, 4);
       const key = others.map((t) => t.id).join("|");

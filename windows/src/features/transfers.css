@@ -1,0 +1,546 @@
+/* LocalSend feature — nearby devices, consent prompt, transfer progress, history
+   and the section 6.5 settings. Everything new is namespaced under .xfer- so
+   nothing here touches a view that already ships; .view / .card / .stack / .btn
+   / .dot / .title / .sub are reused as they are. Colours come only from the app
+   palette in style.css (--card, --dim, --red, --green, --amber, --cyan,
+   --indigo), so there is no second palette to keep in sync. */
+
+.xfer-stack {
+  gap: 4px;
+  padding: 10px 18px 12px;
+  overflow-y: auto;
+}
+
+.xfer-stack > .btn.secondary {
+  align-self: flex-start;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.xfer-subtitle {
+  margin-top: 6px;
+  font: 600 11px var(--font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim-3);
+}
+
+.xfer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.xfer-note {
+  font: 400 11px var(--font);
+  line-height: 1.45;
+  color: var(--dim-3);
+}
+
+/* A refused write says so, and stays until the next one. */
+.xfer-warning {
+  font: 400 11px var(--font);
+  line-height: 1.45;
+  color: var(--red-text);
+}
+
+.xfer-warning:empty {
+  display: none;
+}
+
+/* Stated overflow. Never a silent truncation. */
+.xfer-overflow {
+  color: var(--dim-4);
+  font-style: italic;
+}
+
+.xfer-empty {
+  font: 400 12px var(--font);
+  color: var(--dim-3);
+  padding: 6px 0;
+}
+
+/* Visible focus for every control this module puts on screen. */
+.xfer-devices-view :focus-visible,
+.xfer-consent :focus-visible,
+.xfer-progress :focus-visible,
+.xfer-history-view :focus-visible,
+.xfer-settings :focus-visible,
+.xfer-indicator :focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+/* The scroll containers sit flush with the card, so inset their outline. */
+.xfer-devices-view :focus-visible,
+.xfer-progress :focus-visible,
+.xfer-history-view :focus-visible,
+.xfer-settings :focus-visible {
+  outline-offset: -2px;
+}
+
+/* ── Transport line ────────────────────────────────────────────────────────── */
+
+.xfer-transport {
+  font: 400 10.5px var(--font);
+  color: var(--dim-3);
+}
+
+/* A plaintext or unreported transport is a refusal, so it reads as one. */
+.xfer-transport.is-refused {
+  color: var(--red-text);
+}
+
+/* ── Device list (spec rows 30, 31, 33, 34, 35) ─────────────────────────────── */
+
+.xfer-devices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.xfer-device {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 4px;
+  border-radius: 10px;
+}
+
+.xfer-device.is-offline {
+  opacity: 0.55;
+}
+
+.xfer-device-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Attacker-controlled names: clip rather than widen the island. */
+.xfer-device-name,
+.xfer-file-name {
+  font: 600 12.5px var(--font);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xfer-device-type {
+  font: 400 10.5px var(--font);
+  color: var(--dim-3);
+}
+
+/* A pin is amber, a proved identity is green — and the wording never merges. */
+.xfer-identity {
+  font: 400 10.5px var(--mono);
+  color: var(--amber);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xfer-identity.is-verified {
+  color: var(--green-2);
+}
+
+.xfer-star {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: default;
+}
+
+.xfer-star:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.xfer-star svg {
+  display: block;
+}
+
+.xfer-send {
+  flex: 0 0 auto;
+  padding: 4px 11px;
+  font-size: 11px;
+}
+
+.xfer-send:disabled {
+  opacity: 0.4;
+}
+
+.xfer-send-text {
+  padding: 5px 12px;
+  font-size: 11.5px;
+}
+
+.xfer-manual {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.xfer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink);
+  font: 400 12px var(--mono);
+}
+
+.xfer-input::placeholder {
+  color: var(--dim-4);
+  font-family: var(--font);
+}
+
+.xfer-input:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+.xfer-port {
+  flex: 0 0 88px;
+}
+
+.xfer-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink-2);
+  font: 400 12px var(--font);
+}
+
+/* ── Consent prompt (spec row 36) ──────────────────────────────────────────── */
+
+.xfer-consent-body,
+.xfer-refusal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.xfer-consent-body[hidden],
+.xfer-refusal[hidden] {
+  display: none;
+}
+
+.xfer-consent-sender {
+  font: 600 14px var(--font);
+  color: var(--ink);
+  word-break: break-word;
+}
+
+/* The unverified line is the loudest thing on this card, on purpose. */
+.xfer-consent-identity {
+  font-size: 11.5px;
+}
+
+.xfer-refusal-line {
+  font: 600 13px var(--font);
+  color: var(--red-text);
+}
+
+.xfer-consent-files {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 128px;
+  overflow-y: auto;
+  margin: 3px 0;
+}
+
+.xfer-consent-file {
+  font: 400 11.5px var(--font);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xfer-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--hairline);
+}
+
+.xfer-waiting-row {
+  font: 400 11px var(--font);
+  color: var(--dim-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xfer-countdown {
+  margin-top: 4px;
+  font: 500 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--amber);
+}
+
+.xfer-consent-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 6px;
+}
+
+.xfer-consent-actions .btn:disabled {
+  opacity: 0.4;
+}
+
+/* ── Detailed progress (spec rows 41, 42, 43, 45, 46) ───────────────────────── */
+
+.xfer-summary {
+  font: 600 13px var(--font);
+  color: var(--ink);
+}
+
+.xfer-metrics {
+  font: 400 11px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--dim-2);
+}
+
+.xfer-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 5px;
+  max-height: 196px;
+  overflow-y: auto;
+}
+
+.xfer-file {
+  --tone: var(--dim);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.xfer-file.is-terminal {
+  opacity: 0.8;
+}
+
+.xfer-file-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.xfer-file-state {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font: 400 10px var(--font);
+}
+
+.xfer-bar {
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.xfer-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: inherit;
+  background: var(--tone);
+}
+
+.xfer-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 400 10.5px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--dim-2);
+}
+
+.xfer-pct {
+  color: var(--dim);
+}
+
+.xfer-reason {
+  color: var(--red-text);
+  font-family: var(--font);
+}
+
+.xfer-row-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.xfer-row-btn {
+  padding: 2px 9px;
+  font-size: 10.5px;
+}
+
+.xfer-row-btn[hidden] {
+  display: none;
+}
+
+/* ── History (spec row 48) ─────────────────────────────────────────────────── */
+
+.xfer-history {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.xfer-history-row {
+  font: 400 11.5px var(--font);
+  color: var(--ink-2);
+  padding: 3px 0;
+}
+
+/* ── Settings (spec row 53) ────────────────────────────────────────────────── */
+
+.xfer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 0;
+}
+
+.xfer-field-label {
+  font: 500 12px var(--font);
+  color: var(--ink-2);
+}
+
+.xfer-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.xfer-field-row > .btn.secondary {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.xfer-toggle {
+  align-self: flex-start;
+  width: 34px;
+  height: 19px;
+  margin: 1px 0;
+  accent-color: var(--green);
+  cursor: default;
+}
+
+.xfer-toggle:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.xfer-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+
+.xfer-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.xfer-chip-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 400 12px var(--font);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xfer-chip-remove {
+  flex: 0 0 auto;
+  padding: 2px 9px;
+  font-size: 10.5px;
+}
+
+/* ── Compact-island indicator (288 × 32) ───────────────────────────────────── */
+
+.xfer-indicator {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 288px;
+  height: 32px;
+  padding: 0 14px;
+  font: 400 12px var(--font);
+  color: var(--ink-2);
+  overflow: hidden;
+}
+
+.xfer-indicator svg {
+  flex: 0 0 auto;
+  transform: rotate(-90deg);
+}
+
+/* The class is what carries the transition: with no batch there is no
+   animation at all, and the ring simply sits at zero. */
+.xfer-indicator.is-active circle:last-child {
+  transition: stroke-dashoffset 0.2s linear, stroke 0.2s linear;
+}
+
+.xfer-indicator-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xfer-indicator-pct {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xfer-indicator.is-active circle:last-child,
+  .xfer-consent,
+  .xfer-consent * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

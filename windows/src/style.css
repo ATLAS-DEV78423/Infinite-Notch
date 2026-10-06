@@ -1391,6 +1391,52 @@ input[type="range"]::-webkit-slider-thumb {
 .agent-session :focus-visible, .monitor-open:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .agent-session .monitor-directory { user-select: text; }
 @media (prefers-reduced-motion: reduce) {
+  /* Every view swap is a cross-fade plus a scale. Under reduced motion the island
+     must still change view, just without the movement — so the transition is
+     dropped rather than the state. */
+  .view, .view.on { transition: none !important; }
   .agent-session, .agent-session.on, .agent-session *, .monitor-open { transition: none !important; animation: none !important; }
   #island.monitor-reduced-motion #bot-glow, #island.monitor-reduced-motion #content { transition: none; }
+}
+
+/* ── Compact status rail ─────────────────────────────────────────────────────
+   New notch-expansion feature entry points. Lives in the compact slot beside
+   the mini bot grid and expands into the matching feature view on click.
+   Appended rather than merged so the existing views above stay untouched. */
+#status-rail {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  z-index: 6;
+}
+#island.monitor-reduced-motion #status-rail { transition: none; }
+
+.rail-chip {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.rail-chip:hover { background: rgba(255, 255, 255, 0.11); }
+.rail-chip:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+#island.monitor-reduced-motion .rail-chip { transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  #status-rail, .rail-chip { transition: none !important; animation: none !important; }
 }

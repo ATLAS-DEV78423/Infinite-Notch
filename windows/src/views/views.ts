@@ -12,6 +12,16 @@ import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
 import { buildAgentSession } from "./agent-session";
+import { buildNowPlaying } from "../features/media";
+import { buildSystemHud, buildSystemStatus } from "../features/system";
+import { buildShelf } from "../features/shelf";
+import {
+  buildDeviceList,
+  buildTransferConsent,
+  buildTransferProgress,
+  buildTransferHistory,
+  buildTransferSettings,
+} from "../features/transfers";
 import { contextFraction } from "../core/agent-monitor";
 
 export interface ViewActions {
@@ -559,5 +569,15 @@ export function buildViews(
   map.set("mail", buildPlaceholder("Sending by email isn't in this version.", ""));
   map.set("searching", buildPlaceholder("Claude is searching…", ""));
   map.set("result", buildPlaceholder("Result", ""));
+  // Notch-expansion features.
+  map.set("nowPlaying", buildNowPlaying(actions));
+  map.set("systemHud", buildSystemHud(actions));
+  map.set("systemStatus", buildSystemStatus(actions));
+  map.set("shelf", buildShelf(actions));
+  map.set("devices", buildDeviceList(actions));
+  map.set("transferConsent", buildTransferConsent(actions));
+  map.set("transferProgress", buildTransferProgress(actions));
+  map.set("transferHistory", buildTransferHistory(actions));
+  map.set("transferSettings", buildTransferSettings(actions));
   return map;
 }

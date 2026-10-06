@@ -22,7 +22,18 @@ export type IslandViewName =
   | "result"
   | "note"
   | "settings"
-  | "greeting";
+  | "greeting"
+  // Notch-expansion features. Each one is a real island view so the compact
+  // status rail has something to expand into.
+  | "nowPlaying"
+  | "systemHud"
+  | "systemStatus"
+  | "shelf"
+  | "devices"
+  | "transferConsent"
+  | "transferProgress"
+  | "transferHistory"
+  | "transferSettings";
 
 export type BotStateName =
   | "idle"
@@ -88,6 +99,20 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   note: { height: 160, botX: 60, botY: null, botDiameter: 50, agentMode: "column" },
   settings: { height: 160, botX: 54, botY: null, botDiameter: 46, agentMode: "none" },
   greeting: { height: 150, botX: 320, botY: 90, botDiameter: 0, agentMode: "none" },
+  // New feature views. These are dense data views (file lists, transfer queues,
+  // consent prompts) whose cards already own the full card width, so Mochi is not
+  // drawn on them — botDiameter 0, exactly like `greeting`. Giving Mochi a spot in
+  // these needs a design pass that does not overlap the content; see
+  // docs/research/notch-feature-views.md.
+  nowPlaying: { height: 200, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
+  systemHud: { height: 176, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
+  systemStatus: { height: 224, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
+  shelf: { height: 272, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
+  devices: { height: 272, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
+  transferConsent: { height: 280, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
+  transferProgress: { height: 288, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
+  transferHistory: { height: 272, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
+  transferSettings: { height: 288, botX: 0, botY: null, botDiameter: 0, agentMode: "none" },
 };
 
 // The upload views above are only the fallback geometry. Once a file is actually
