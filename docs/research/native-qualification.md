@@ -268,11 +268,52 @@ are not reclassified as absent; hosted passes remain compiler/fixture evidence.
 Both running watchers completed. Planning the remaining features does not repeat
 these jobs or declare interactive/sandbox/crash/export/signing acceptance complete.
 
+### Shelf/CPU native GREEN: `91faab3`
+
+2026-10-06. Exact source `91faab31f57e31f20050461ebbb1b4e4367af1ac`.
+[Mac run 37483813230](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37483813230)
+completed **success** at every check: 13 screen-geometry, 15 safe-link, chat
+parsing, plan gauge, ask-question, 21 hover, **23 file-preparation**, **31 shelf
+storage** cases (two leases/last release, namespace substitution, capacity and
+shutdown races, folder round trip, 4096-entry and depth-64 ceilings, bounded
+text and link-as-text), **10 gated CPU cases** plus 2 informational host probes,
+and unsigned NotchBuddy Debug, CoucouAppStore Debug and NotchBuddy Release.
+[Tauri run 37482147553](https://github.com/ATLAS-DEV78423/Infinite-Notch/actions/runs/37482147553)
+completed **success** for both Windows and Linux jobs at `6cebdcd`, the parent
+commit; no Rust source changed in `91faab3`, so that lane is not re-run.
+
+This took four hosted rounds, each one a real defect the previous round exposed:
+
+| Round | SHA | Hosted result | Defect found by the run |
+| --- | --- | --- | --- |
+| 1 | `208e727` | RED | `host_self()` is in `<mach/host_priv.h>`, unimported by Swift; the previous repair had added `import MachO` instead |
+| 1 | `208e727` | RED | `committedIdentity` was read before the rename, but a rename updates the inode's ctime, so every single-file preparation refused itself with `invalidSource` |
+| 2 | `a2b9eea` | RED | `loadPercentage` asked whether `UInt64` subtraction was `>= 0`: unreachable, and a counter reset trapped instead of returning unavailable |
+| 2 | `a2b9eea` | RED | the "all-idle" CPU fixture also advanced user/system (300 busy vs 850 idle = 26%), and a folder case demanded deletion authority from a lease release |
+| 3 | `6cebdcd` | RED | `clamp(.infinity)` returned 0 because `isFinite` treated infinity as meaningless |
+| 3 | `6cebdcd` | RED | the 64-deep folder case died as SIGBUS (`Bus error: 10`, exit 138): the walk, `verify()` and `remove()` recursed per level on a 512 KiB GCD thread |
+| 4 | `91faab3` | **GREEN** | — |
+
+Two points worth keeping. Three of those defects were *inverted* contracts —
+a test asserting a property its own fixture never had, and a clamp that mapped
+an unbounded magnitude to zero — which source review had accepted. And the
+uncommitted "rollback" staged in the checkout before this work could not have
+produced GREEN: it deleted the CPU monitor and the folder ingest while leaving
+the ctime bug and the unreachable guard in place, so both suites still failed.
+
+The remaining shelf/native boundaries are unchanged: this qualifies native
+storage lifetime and bounded ingest on the hosted runner only. Real Finder,
+Explorer, share, Mail and Messages consumer lifetimes, crash reaping, the
+shelf UI and LocalSend are not qualified by it.
+
 ## Still not qualified
 
 Mac native hover/input, sandbox and real owned-preparation interaction acceptance;
 Windows broad reparse/restart cleanup and native command/OLE/Explorer delivery
 beyond the passing hosted copy/workspace/build fixtures;
+shelf open/export/share/Mail/Messages consumer lifetimes and Mac/Windows crash
+reaping (the storage layer they depend on is now GREEN; the OS consumers are not);
+Mac SwiftUI views for the nine island features;
 rich agent sources/ingress/lifetime and SwiftUI Details;
 the full multi-item shelf/LocalSend/media/system/calendar/extras scope.
 
