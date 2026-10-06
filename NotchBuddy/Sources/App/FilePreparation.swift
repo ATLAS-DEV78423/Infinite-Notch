@@ -532,10 +532,13 @@ private final class PreparationStorage: @unchecked Sendable {
               NativePath.unchanged(original, try currentSource.info()),
               directory.matches(partialName, partialIdentity),
               (try partial.info()).st_size == original.st_size else { throw FilePreparationError.invalidSource }
-        let committedIdentity = try partial.info()
-        try control.publish { try publish(partialName, as: name, in: directory, identity: committedIdentity) }
+        try control.publish { try publish(partialName, as: name, in: directory, identity: partialIdentity) }
         guard fsync(directory.fd.raw) == 0 else { throw FilePreparationError.storage }
         let readyURL = directory.url.appendingPathComponent(name)
+        // A rename updates the published inode's ctime, so the delivered identity is read
+        // after publication: `unchanged` against a pre-rename snapshot can never hold, and
+        // reading it early made every single-file preparation refuse itself.
+        let committedIdentity = try partial.info()
         checkpoint?(.afterPublish)
         try control.check()
         // Publication is not delivery: re-open the actual returned namespace without following aliases.

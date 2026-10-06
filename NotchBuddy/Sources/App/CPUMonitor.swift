@@ -1,6 +1,5 @@
 import Foundation
 import Darwin
-import MachO
 
 /// One system-wide CPU tick snapshot.
 ///
@@ -25,7 +24,7 @@ enum CPUMonitorError: Error, Sendable, Equatable {
 
 struct CPUSample: Sendable, Equatable {
     enum Source: Sendable, Equatable {
-        /// `host_statistics64(host_self(), HOST_CPU_LOAD_INFO, ...)`
+        /// `host_statistics64(mach_host_self(), HOST_CPU_LOAD_INFO, ...)`
         case aggregate
     }
 
@@ -160,11 +159,13 @@ actor CPUMonitor {
 
     private func acquireHostPort() -> mach_port_t? {
         if let hostPort { return hostPort }
-        // <mach/mach.h> host_self(): the NON-privileged host port, already granted to every process.
-        // host_priv_self() is never used; it needs privileges this app does not want.
+        // <mach/mach_host.h> mach_host_self(): the NON-privileged host port, already granted to
+        // every process. host_self()/host_priv_self() live in <mach/host_priv.h>, which Swift
+        // does not import; host_priv_self() is never wanted anyway, it needs privileges this
+        // app does not ask for.
         // One send right is kept for this owner's lifetime: re-acquiring per sample would grow
         // port rights without bound.
-        let port = host_self()
+        let port = mach_host_self()
         guard port != MACH_PORT_NULL else { return nil }
         hostPort = port
         return port
