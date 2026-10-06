@@ -24,6 +24,12 @@ import { buildSystemIndicator } from "../features/system";
 import { buildShelfIndicator } from "../features/shelf";
 import { buildTransferIndicator } from "../features/transfers";
 import { transfersStore } from "../features/transfers";
+import {
+  SHELF_OPEN_EVENT,
+  SHELF_REVEAL_EVENT,
+  SHELF_SHARE_EVENT,
+  shelfStore,
+} from "../features/shelf";
 
 const BOT_OVERHANG = 40;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
@@ -754,6 +760,23 @@ export class Island {
       this.fsm.setHold("drag", !State.paused && (e.type === "enter" || e.type === "over"));
       this.onDragDrop(e);
     });
+    // Shelf rows dispatch an asset ID and nothing else; native resolves the path
+    // from the lease it takes for the action. A refusal becomes visible in the
+    // shelf's own banner rather than a console error the user never sees.
+    const shelfAction = (event: Event, run: (assetId: string) => Promise<unknown>) => {
+      event.preventDefault();
+      const assetId = (event as CustomEvent<string>).detail;
+      if (typeof assetId !== "string" || !assetId) return;
+      void run(assetId).then((error) => {
+        if (typeof error === "string") {
+          shelfStore.set({ ...shelfStore.get(), shelfError: error });
+        }
+      });
+    };
+    this.islandEl.addEventListener(SHELF_OPEN_EVENT, (e) => shelfAction(e, Bridge.shelfOpen));
+    this.islandEl.addEventListener(SHELF_REVEAL_EVENT, (e) => shelfAction(e, Bridge.shelfReveal));
+    this.islandEl.addEventListener(SHELF_SHARE_EVENT, (e) => shelfAction(e, Bridge.shelfShare));
+
     void onEvent<null>("screen-changed", () => this.cancelInputTimers());
     window.addEventListener("pagehide", () => {
       this.clearPreparation();

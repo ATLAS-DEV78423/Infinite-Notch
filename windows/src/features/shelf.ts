@@ -28,6 +28,11 @@ import type { ViewActions, ViewHost } from "./contract";
 export type ShelfKind = "file" | "folder" | "image" | "text";
 
 export interface ShelfItem {
+  /**
+   * Native's asset ID for this row, and the ONLY thing an action may name. The
+   * island sends it back and native resolves the path from its own lease, so the
+   * view can never ask the OS to open a file it does not own.
+   */
   id: string;
   name: string;
   /** Absolute path. Native-owned; the view only ever passes it back to native. */
@@ -72,11 +77,15 @@ export const SHELF_CAPACITY = 32;
  * Events dispatched on the view root, all `bubbles: true` so the controller can
  * delegate from a container. None of them act on their own — every one is a
  * request for native:
- *   `shelf-open`            detail: `path: string`       → `NativeActions.openPath`
- *   `shelf-share`           detail: `path: string`       → `NativeActions.sharePath` (platform share sheet)
- *   `shelf-reveal`          detail: `path: string`       → `NativeActions.revealPath`
+ *   `shelf-open`            detail: `assetId: string`    → `Bridge.shelfOpen`
+ *   `shelf-share`           detail: `assetId: string`    → `Bridge.shelfShare`
+ *   `shelf-reveal`          detail: `assetId: string`    → `Bridge.shelfReveal`
  *   `shelf-remove`          detail: `{ id: string }`    → drop the row only; native owns deletion
  *   `shelf-drag`            detail: `{ id, path }`      → real native drag-out (OLE / Finder) when available
+ *
+ * Drag is the one action still carried by a path, because a DOM drag has to hand
+ * the webview a `DownloadURL` to attach. It is a copy hint, not authority: the
+ * bytes live in the owned copy and native keeps the lease alive for the drop.
  *   `shelf-toggle-order`    no detail                    → flip `newestFirst`, then re-sort
  *   `shelf-toggle-enabled`  no detail                    → turn the shelf off / on
  *   `shelf-drop`            detail: `paths: string[]`   → ingest these explicitly chosen selections
@@ -226,19 +235,19 @@ export function buildShelf(actions: ViewActions): ViewHost {
     let removeBtn: HTMLButtonElement | null = null;
     let renderedThumb: string | null | undefined;
 
-    share.addEventListener("click", () => withItem(id, (item) => fire(SHELF_SHARE_EVENT, item.path)));
-    reveal.addEventListener("click", () => withItem(id, (item) => fire(SHELF_REVEAL_EVENT, item.path)));
+    share.addEventListener("click", () => withItem(id, (item) => fire(SHELF_SHARE_EVENT, item.id)));
+    reveal.addEventListener("click", () => withItem(id, (item) => fire(SHELF_REVEAL_EVENT, item.id)));
 
     // Spec row #24: the second click of a double-click opens the item. Clicks
     // inside the button row belong to those buttons, never to "open this file".
     tileEl.addEventListener("click", (event) => {
       if (event.detail !== 2 || (event.target as Element).closest(".shelf-tile-actions")) return;
-      withItem(id, (item) => fire(SHELF_OPEN_EVENT, item.path));
+      withItem(id, (item) => fire(SHELF_OPEN_EVENT, item.id));
     });
     tileEl.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       event.preventDefault();
-      withItem(id, (item) => fire(SHELF_OPEN_EVENT, item.path));
+      withItem(id, (item) => fire(SHELF_OPEN_EVENT, item.id));
     });
 
     tileEl.addEventListener("dragstart", (event) => {

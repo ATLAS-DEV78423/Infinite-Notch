@@ -85,6 +85,17 @@ pub fn reveal_folder(path: &str) {
     let _ = Command::new("explorer").arg(path).spawn();
 }
 
+/// Open a file with whatever the OS has associated with it.
+///
+/// The same `FileProtocolHandler` handoff `open_url` already uses: the OS resolves
+/// the association and launches the app, so a double-click and this agree. A
+/// shell-less `ShellExecuteW` would be the tidier API, but that means a new
+/// windows-sys dependency for one call — the reuse is smaller and already proven
+/// by the existing link paths.
+pub fn open_file(path: &str) {
+    open_url(path);
+}
+
 /// Our own `where`: walks %PATH% against %PATHEXT%, no shell involved.
 /// Rust quotes arguments correctly for `.cmd`/`.bat` targets since 1.77, so
 /// spawning `code.cmd` directly is safe.

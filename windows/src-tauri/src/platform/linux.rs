@@ -134,6 +134,14 @@ pub fn reveal_folder(path: &str) {
     let _ = Command::new("xdg-open").arg(path).spawn();
 }
 
+/// Linux has no `reveal in folder` that does not depend on a file manager being
+/// installed and knowing its own command line, so opening the parent directory is
+/// the honest equivalent. Documented rather than hidden: the Windows build is the
+/// one the "reveal" row is qualified against.
+pub fn open_file(path: &str) {
+    let _ = Command::new("xdg-open").arg(path).spawn();
+}
+
 /// Our own `which`: the first executable file named `stem` on $PATH.
 pub fn find_on_path(stem: &str) -> Option<PathBuf> {
     let dirs = std::env::var_os("PATH")?;

@@ -328,6 +328,11 @@ impl DropCopies {
         match failure { Some(error) => Err(error.message().to_owned()), None => Ok(()) }
     }
 
+    /// Live native leases. Test-only: it exists so an action test can prove a
+    /// lease was taken and released, which no product code path should report.
+    #[cfg(test)]
+    pub fn lease_count(&self) -> usize { self.0.state.lock().unwrap().leases.len() }
+
     /// Returns true exactly once, and None once cleanup has finished, allowing
     /// the follow-up native exit request through.
     pub fn request_exit(&self) -> Option<bool> {
@@ -404,7 +409,7 @@ impl Drop for CopyJob {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -431,7 +436,7 @@ mod tests {
     }
     impl Drop for Root { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
 
-    trait Fixture<T> { fn fixture(self) -> T; }
+    pub(crate) trait Fixture<T> { fn fixture(self) -> T; }
     impl<T, E> Fixture<T> for Result<T, E> {
         fn fixture(self) -> T { self.unwrap_or_else(|_| panic!("synthetic native shelf fixture failed")) }
     }
@@ -452,6 +457,49 @@ mod tests {
             .unwrap_or_else(|_| panic!("synthetic shelf preparation failed"));
         assert!(std::fs::read(source).fixture() == b"synthetic", "shelf preparation changed original bytes");
         asset
+    }
+
+    /// One synthetic shelf item with a ready regular-file asset. Owned by the
+    /// caller so an action test can hold a lease across a row removal.
+    pub struct ShelfFixture {
+        pub copies: DropCopies,
+        /// The synthetic original, outside the owned copy root.
+        pub source: String,
+        pub item_id: String,
+        pub asset_id: String,
+        /// The private root `DropCopies` was built on, so a test can assert a
+        /// leased path is the owned copy rather than the original.
+        pub copies_root: String,
+        root: Root,
+    }
+
+    impl ShelfFixture {
+        pub fn new(index: u64) -> Self {
+            let root = Root::new();
+            let source = root.source();
+            let copies_root = root.0.join("copies");
+            let copies = DropCopies::at(copies_root.clone());
+            let (item, operation) = shelf_ids(index);
+            let asset = copies.begin_shelf(item.clone(), operation)
+                .unwrap_or_else(|_| panic!("synthetic shelf admission failed"))
+                .run(source.clone())
+                .unwrap_or_else(|_| panic!("synthetic shelf preparation failed"));
+            assert!(std::fs::read(&source).fixture() == b"synthetic", "shelf preparation changed original bytes");
+            ShelfFixture {
+                copies, source, item_id: item, asset_id: asset.asset_id,
+                copies_root: copies_root.to_str().unwrap().to_owned(), root,
+            }
+        }
+    }
+
+    impl Drop for ShelfFixture {
+        fn drop(&mut self) {
+            // Shutdown waits for live leases, so a test that deliberately leaks one
+            // must not deadlock in cleanup. Root removal is unconditional anyway.
+            if self.copies.lease_count() == 0 { self.copies.shutdown(); }
+            let _ = std::fs::remove_file(&self.source);
+            let _ = &self.root;
+        }
     }
 
     #[test]

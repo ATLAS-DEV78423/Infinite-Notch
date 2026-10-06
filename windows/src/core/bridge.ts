@@ -20,6 +20,22 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T |
   }
 }
 
+/**
+ * Like `call`, but a refusal is a result, not a swallowed error: it resolves to the
+ * message so the view can show it. Success resolves to `null`, which is what the
+ * shelf's banner check treats as "nothing to report".
+ */
+async function shelfCall(cmd: string, args?: Record<string, unknown>): Promise<string | null> {
+  if (!IS_TAURI) return null;
+  try {
+    await invoke(cmd, args);
+    return null;
+  } catch (err) {
+    // A command's own `Err(String)` is the message; anything else is a real fault.
+    return typeof err === "string" ? err : "That action is unavailable.";
+  }
+}
+
 export interface BootInfo {
   settings: Settings;
   /** Logical screen rect of the monitor the island lives on. */
@@ -51,6 +67,20 @@ export const Bridge = {
   reposition: () => call<void>("reposition"),
 
   openUrl: (url: string) => call<void>("open_url", { url }),
+
+  /**
+   * Shelf row actions. These take an ASSET ID, never a path: native validates the
+   * asset, leases the owned copy and hands the OS that path. There is deliberately
+   * no way to ask native to open an arbitrary path from the shelf.
+   *
+   * `call` already turns a rejected command into `null` plus a console error, which
+   * would swallow a refusal the UI is supposed to show, so these go through
+   * `shelfCall` instead: a refusal comes back as its message.
+   */
+  shelfOpen: (assetId: string) => shelfCall("shelf_open", { assetId }),
+  shelfReveal: (assetId: string) => shelfCall("shelf_reveal", { assetId }),
+  /** Refused on every platform in this build; see shelf_actions.rs. */
+  shelfShare: (assetId: string) => shelfCall("shelf_share", { assetId }),
 
   /** "Open terminal" → opens the folder in VS Code when `code` is on PATH. */
   openInVSCode: (path: string | null) => call<boolean>("open_in_vscode", { path }),

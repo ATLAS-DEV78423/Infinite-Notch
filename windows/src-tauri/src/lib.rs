@@ -11,6 +11,7 @@ mod pipe;
 mod platform;
 mod secrets;
 mod settings;
+mod shelf_actions;
 mod tray;
 
 use std::process::Command;
@@ -268,6 +269,28 @@ async fn prepare_file(path: String, operation_id: String, copies: State<'_, Drop
         .map_err(|_| "File preparation stopped.".to_owned())?
 }
 
+/// Shelf row actions. The island sends an ASSET ID, never a path: the path the
+/// OS receives comes from the lease native just validated, so the UI cannot name
+/// a file it does not own. The lease covers the handoff, so removing the row
+/// while the OS has the file cannot delete it.
+#[tauri::command]
+fn shelf_open(asset_id: String, copies: State<'_, DropCopies>) -> Result<(), String> {
+    shelf_actions::run_action(&copies, &asset_id, shelf_actions::ShelfAction::Open).map(|_| ())
+}
+
+#[tauri::command]
+fn shelf_reveal(asset_id: String, copies: State<'_, DropCopies>) -> Result<(), String> {
+    shelf_actions::run_action(&copies, &asset_id, shelf_actions::ShelfAction::Reveal).map(|_| ())
+}
+
+/// Share is refused, not approximated. No platform here reports back when a share
+/// sheet finishes, so there is no point at which the lease provably may be
+/// released; the UI renders this refusal rather than a silent no-op.
+#[tauri::command]
+fn shelf_share(_asset_id: String) -> Result<(), String> {
+    Err(shelf_actions::SHARE_UNAVAILABLE.to_owned())
+}
+
 #[tauri::command]
 fn cancel_file_copy(operation_id: String, copies: State<'_, DropCopies>) {
     if copies.revoke(&operation_id) {
@@ -417,6 +440,9 @@ pub fn run() {
             ingest_file,
             prepare_file,
             cancel_file_copy,
+            shelf_open,
+            shelf_reveal,
+            shelf_share,
             secret_present,
             secret_set,
             secret_clear,

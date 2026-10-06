@@ -221,6 +221,47 @@ export async function run(results: HTMLElement) {
   await pause();
   check('disabled shelf shows an off state', /disabled|off/i.test(shelfEl.textContent!));
 
+  // ── Actions name an asset, never a path (spec rows #24/#25, handoff §8) ───────
+  //
+  // The view must hand native an opaque asset ID. If it ever sent the path back,
+  // the UI could ask the OS to open anything, so that is asserted on the actual
+  // dispatched event rather than on the source.
+  shelfStore.set({ items, enabled: true, newestFirst: false, shelfError: null }, true);
+  syncDom();
+  await pause();
+  const openRow = [...shelfEl.querySelectorAll<HTMLElement>('[role="listitem"]')]
+    .find((r) => r.textContent!.includes('file-1.txt'))!;
+  const dispatched: { name: string; detail: unknown }[] = [];
+  for (const name of ['shelf-open', 'shelf-share', 'shelf-reveal']) {
+    shelfEl.addEventListener(name, (e) => dispatched.push({ name, detail: (e as CustomEvent).detail }), { once: true });
+  }
+  // A double-click is two clicks: the view opens on the second click's detail===2.
+  openRow.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+  openRow.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+  await pause();
+  // The first action button on an ordinary row is Share, then Reveal.
+  const [shareBtn, revealBtn] = [...openRow.querySelectorAll<HTMLButtonElement>('button.shelf-act')];
+  shareBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  revealBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await pause();
+  check('open, share and reveal each dispatch the asset ID, never a path',
+    dispatched.length === 3
+    && dispatched.map((d) => d.name).join(',') === 'shelf-open,shelf-share,shelf-reveal'
+    && dispatched.every((d) => d.detail === 'item-1'),
+    false);
+  check('no shelf action detail is ever a filesystem path',
+    dispatched.every((d) => typeof d.detail === 'string' && !d.detail.includes('/') && !d.detail.includes('\\')),
+    false);
+  const failedRow = [...shelfEl.querySelectorAll<HTMLElement>('[role="listitem"]')]
+    .find((r) => r.textContent!.includes('Permission denied'))!;
+  const beforeFailed = dispatched.length;
+  for (const button of failedRow.querySelectorAll<HTMLButtonElement>('button.shelf-act')) {
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  }
+  failedRow.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+  await pause();
+  check('a failed item dispatches no action at all', dispatched.length === beforeFailed);
+
   // Arrival order is the default; newest-first is opt-in. Assert on real DOM order.
   const arrivals = [mkItem(0, { addedAtMs: 300 }), mkItem(1, { addedAtMs: 100 }), mkItem(2, { addedAtMs: 200 })];
   const domOrder = async (items: ShelfItem[], newest: boolean) => {
