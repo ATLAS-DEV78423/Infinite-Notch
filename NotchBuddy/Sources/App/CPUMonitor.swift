@@ -157,7 +157,10 @@ actor CPUMonitor {
 
     /// Single clamp point for every published percentage.
     static func clamp(_ percent: Double) -> Double {
-        guard percent.isFinite else { return 0 }
+        // NaN is the only value with no side: it is not "below 0", it is meaningless, and it
+        // becomes 0. An infinity is a real magnitude with a direction, so the ordinary
+        // min/max clamp already handles it correctly; `isFinite` would send +inf to 0.
+        guard !percent.isNaN else { return 0 }
         return min(100, max(0, percent))
     }
 

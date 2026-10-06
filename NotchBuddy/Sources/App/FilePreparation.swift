@@ -600,40 +600,53 @@ private final class PreparationStorage: @unchecked Sendable {
     /// ceiling bounds the whole tree and a subtree can never slip past it.
     private struct IngestTally { var entries = 0; var bytes: UInt64 = 0 }
 
+    /// An explicit work stack, never host recursion.
+    ///
+    /// The depth ceiling is a *data* bound on what may be ingested; it was never a promise
+    /// that the copying thread's stack survives that many nested frames. The worker runs on a
+    /// GCD thread, whose default 512 KiB stack is far smaller than the main thread's, and an
+    /// arm64 Darwin stack overflow surfaces as SIGBUS ("Bus error"), not a catchable Swift
+    /// error: a legal 64-deep tree killed the process instead of being copied.
+    ///
+    /// Counts accumulate across the whole tree, so the entry ceiling still bounds every
+    /// subtree and no branch can slip past it by being counted in a directory of its own.
     private func copyTree(from source: NativeFD, into target: OwnedDirectory, depth: Int,
                           control: PreparationCancellation) throws -> IngestTally {
         var tally = IngestTally()
-        let raw = openat(source.raw, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
-        guard raw >= 0 else { throw NativePath.failure() }
-        guard let listing = fdopendir(raw) else { Darwin.close(raw); throw NativePath.failure() }
-        defer { closedir(listing) }
-        while let current = readdir(listing) {
-            let walked = withUnsafeBytes(of: current.pointee.d_name) { bytes in
-                String(cString: bytes.bindMemory(to: CChar.self).baseAddress!)
-            }
-            // "." and ".." are the directory's own structural links, not entries.
-            guard walked != ".", walked != ".." else { continue }
-            guard let name = NativePath.safeComponent(walked) else { throw FilePreparationError.unsupportedEntry }
-            tally.entries += 1
-            guard tally.entries <= Self.folderEntryLimit else { throw FilePreparationError.tooManyEntries }
-            // Classify without following: a symlink, FIFO, socket or device is refused here.
-            var scanned = stat()
-            guard fstatat(source.raw, name, &scanned, AT_SYMLINK_NOFOLLOW) == 0 else { throw NativePath.failure() }
-            let entryKind = UInt32(scanned.st_mode) & UInt32(S_IFMT)
-            if entryKind == UInt32(S_IFDIR) {
-                guard depth + 1 <= Self.folderDepthLimit else { throw FilePreparationError.tooDeep }
-                let next = openat(source.raw, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
-                guard next >= 0 else { throw NativePath.failure() }
-                // Empty directories are created, not skipped: the local hierarchy survives.
-                let childSource = NativeFD(next)
-                let childTarget = try OwnedDirectory.create(named: name, in: target)
-                let child = try copyTree(from: childSource, into: childTarget, depth: depth + 1, control: control)
-                tally.entries += child.entries
-                tally.bytes += child.bytes
-            } else if entryKind == UInt32(S_IFREG) {
-                tally.bytes += try copyFile(named: name, in: source, scanned: scanned, into: target, control: control)
-            } else {
-                throw FilePreparationError.unsupportedEntry
+        var pending: [(source: NativeFD, target: OwnedDirectory, depth: Int)] = [(source, target, depth)]
+        while let job = pending.popLast() {
+            let raw = openat(job.source.raw, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+            guard raw >= 0 else { throw NativePath.failure() }
+            guard let listing = fdopendir(raw) else { Darwin.close(raw); throw NativePath.failure() }
+            defer { closedir(listing) }
+            while let current = readdir(listing) {
+                let walked = withUnsafeBytes(of: current.pointee.d_name) { bytes in
+                    String(cString: bytes.bindMemory(to: CChar.self).baseAddress!)
+                }
+                // "." and ".." are the directory's own structural links, not entries.
+                guard walked != ".", walked != ".." else { continue }
+                guard let name = NativePath.safeComponent(walked) else { throw FilePreparationError.unsupportedEntry }
+                tally.entries += 1
+                guard tally.entries <= Self.folderEntryLimit else { throw FilePreparationError.tooManyEntries }
+                // Classify without following: a symlink, FIFO, socket or device is refused here.
+                var scanned = stat()
+                guard fstatat(job.source.raw, name, &scanned, AT_SYMLINK_NOFOLLOW) == 0 else {
+                    throw NativePath.failure()
+                }
+                let entryKind = UInt32(scanned.st_mode) & UInt32(S_IFMT)
+                if entryKind == UInt32(S_IFDIR) {
+                    guard job.depth + 1 <= Self.folderDepthLimit else { throw FilePreparationError.tooDeep }
+                    let next = openat(job.source.raw, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+                    guard next >= 0 else { throw NativePath.failure() }
+                    // Empty directories are created, not skipped: the local hierarchy survives.
+                    let childTarget = try OwnedDirectory.create(named: name, in: job.target)
+                    pending.append((NativeFD(next), childTarget, job.depth + 1))
+                } else if entryKind == UInt32(S_IFREG) {
+                    tally.bytes += try copyFile(named: name, in: job.source, scanned: scanned,
+                                                into: job.target, control: control)
+                } else {
+                    throw FilePreparationError.unsupportedEntry
+                }
             }
         }
         return tally
@@ -885,8 +898,9 @@ private enum NativePath {
 private final class OwnedDirectory {
     let url: URL
     let fd: NativeFD
-    private let parent: NativeFD
-    private let name: String
+    // Read by remove()'s unlink step, which is a method of this type.
+    fileprivate let parent: NativeFD
+    fileprivate let name: String
     let identity: stat
     var files: [String: stat] = [:]
     // Nested owned directories, registered by name exactly like regular entries.
@@ -942,34 +956,50 @@ private final class OwnedDirectory {
     }
     /// Registered identities only, resolved through the descriptors that created them: a
     /// substituted entry anywhere in a ready tree refuses the whole item.
+    ///
+    /// An explicit work stack, not recursion, for the same reason the ingest walk uses one:
+    /// this runs on the native storage thread, and a legal 64-level tree must not be able to
+    /// exhaust that thread's stack (an arm64 overflow is SIGBUS, not a catchable error).
     func verify() throws {
-        try revalidateEntry()
-        for (name, expected) in files where !matches(name, expected) {
-            throw FilePreparationError.invalidSource
+        var pending: [OwnedDirectory] = [self]
+        while let directory = pending.popLast() {
+            try directory.revalidateEntry()
+            for (name, expected) in directory.files where !directory.matches(name, expected) {
+                throw FilePreparationError.invalidSource
+            }
+            pending.append(contentsOf: directory.children.values)
         }
-        for child in children.values { try child.verify() }
     }
     func remove() -> Bool {
         // No path-based recursive sweep: only registered entries relative to the retained descriptor.
         // Foreign substitutions and nonempty directories remain intact and report controlled cleanup failure.
-        for name in Array(files.keys) {
-            var current = stat()
-            if fstatat(fd.raw, name, &current, AT_SYMLINK_NOFOLLOW) != 0 {
-                if errno == ENOENT { files.removeValue(forKey: name); continue }
-                return false
+        enum Step { case descend(OwnedDirectory), unlinkDirectory(OwnedDirectory) }
+        var pending: [Step] = [.descend(self)]
+        while let step = pending.popLast() {
+            switch step {
+            case .descend(let directory):
+                for name in Array(directory.files.keys) {
+                    var current = stat()
+                    if fstatat(directory.fd.raw, name, &current, AT_SYMLINK_NOFOLLOW) != 0 {
+                        if errno == ENOENT { directory.files.removeValue(forKey: name); continue }
+                        return false
+                    }
+                    guard let expected = directory.files[name], NativePath.sameIdentity(expected, current),
+                          unlinkat(directory.fd.raw, name, 0) == 0 else { return false }
+                    directory.files.removeValue(forKey: name)
+                }
+                // LIFO order: this directory's own unlink is pushed FIRST, so every child
+                // queued above it is fully descended and unlinked before its parent is removed.
+                pending.append(.unlinkDirectory(directory))
+                pending.append(contentsOf: directory.children.values.map(Step.descend))
+                directory.children.removeAll()
+            case .unlinkDirectory(let directory):
+                var current = stat()
+                guard fstatat(directory.parent.raw, directory.name, &current, AT_SYMLINK_NOFOLLOW) == 0,
+                      NativePath.sameIdentity(directory.identity, current),
+                      unlinkat(directory.parent.raw, directory.name, AT_REMOVEDIR) == 0 else { return false }
             }
-            guard let expected = files[name], NativePath.sameIdentity(expected, current),
-                  unlinkat(fd.raw, name, 0) == 0 else { return false }
-            files.removeValue(forKey: name)
         }
-        // Depth first: a nested directory only unlinks once its own registered entries are gone.
-        for child in children.values {
-            guard child.remove() else { return false }
-        }
-        children.removeAll()
-        var current = stat()
-        guard fstatat(parent.raw, name, &current, AT_SYMLINK_NOFOLLOW) == 0,
-              NativePath.sameIdentity(identity, current), unlinkat(parent.raw, name, AT_REMOVEDIR) == 0 else { return false }
         return true
     }
 }
